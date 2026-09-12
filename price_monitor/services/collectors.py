@@ -27,6 +27,12 @@ def collect_gasoil() -> dict:
 
 
 def collect_brent() -> dict:
+    if FRED_API_KEY:
+        query = urlencode({"series_id": "DCOILBRENTEU", "api_key": FRED_API_KEY, "file_type": "json", "sort_order": "desc", "limit": 10})
+        data = _request_json(f"https://api.stlouisfed.org/fred/series/observations?{query}")
+        for obs in data.get("observations", []):
+            if obs.get("value") not in (None, "."):
+                return {"product": "brent", "price": float(obs["value"]), "unit": "USD/baril", "source": "EIA/FRED - DCOILBRENTEU", "source_date": obs["date"], "notes": "Collecte API FRED"}
     if ALPHA_VANTAGE_API_KEY:
         query = urlencode({"function": "BRENT", "interval": "daily", "apikey": ALPHA_VANTAGE_API_KEY, "datatype": "json"})
         data = _request_json(f"https://www.alphavantage.co/query?{query}")
@@ -36,7 +42,7 @@ def collect_brent() -> dict:
             value = obs.get("value") or obs.get("price")
             if date and value not in (None, "."):
                 return {"product": "brent", "price": float(value), "unit": "USD/baril", "source": "Alpha Vantage - BRENT", "source_date": date[:10], "notes": "Collecte API Alpha Vantage"}
-    raise RuntimeError("ALPHA_VANTAGE_API_KEY non configurée")
+    raise RuntimeError("FRED_API_KEY ou ALPHA_VANTAGE_API_KEY non configurée")
 
 
 def demo_observations() -> list[dict]:
@@ -58,8 +64,9 @@ def collect_all() -> tuple[list[dict], list[str]]:
             observations.append(collector())
         except Exception as exc:  # source failure must not stop the other source
             messages.append(str(exc))
-    if DEMO_MODE or len(observations) < 2:
+    if DEMO_MODE:
         observations = demo_observations()
-        messages.append("Mode démonstration actif ou source publique indisponible.")
+        messages.append("Mode démonstration actif.")
+    elif not observations:
+        raise RuntimeError("Aucune source publique disponible. Configurez FRED_API_KEY pour actualiser les données.")
     return observations, messages
-

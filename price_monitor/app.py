@@ -54,11 +54,11 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         try:
             if parsed.path == "/api/dashboard":
-                days = max(1, min(365, int(query.get("days", [30])[0])))
+                days = max(1, min(1825, int(query.get("days", [30])[0])))
                 return self.send_json(database.dashboard(days))
             if parsed.path == "/api/observations":
                 product = query.get("product", [None])[0]
-                days = max(1, min(365, int(query.get("days", [30])[0])))
+                days = max(1, min(1825, int(query.get("days", [30])[0])))
                 return self.send_json(database.observations(product, days))
             if parsed.path == "/api/logs":
                 return self.send_json({"logs": database.logs()})

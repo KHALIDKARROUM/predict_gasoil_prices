@@ -61,7 +61,7 @@ function renderLatest(rows) {
 }
 
 async function loadDashboard() {
-  const days = $('#period-select').value; $('#period-label').textContent = days == 365 ? '12 derniers mois' : `${days} derniers jours`;
+  const days = $('#period-select').value; $('#period-label').textContent = days == 365 ? '12 derniers mois' : days == 1825 ? '5 dernières années' : `${days} derniers jours`;
   try {
     const response = await fetch(`/api/dashboard?days=${days}`); if (!response.ok) throw new Error('Impossible de charger le tableau de bord.');
     const data = await response.json(); renderMetrics(data.metrics); renderChart(data.series); renderLatest(data.latest);

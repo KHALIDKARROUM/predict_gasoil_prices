@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import csv
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import DB_PATH, DEMO_MODE, STORAGE_DIR
+from .config import DB_PATH, DEMO_MODE, REAL_DATA_PATH, STORAGE_DIR
 
 
 PRODUCTS = {
@@ -79,12 +80,14 @@ class Database:
             self._seed_sources(conn)
             count = conn.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0]
             if count == 0:
-                self._seed_demo(conn)
+                imported = self._seed_real_data(conn)
+                if imported == 0 and DEMO_MODE:
+                    self._seed_demo(conn)
 
     def _seed_sources(self, conn: sqlite3.Connection) -> None:
         rows = [
             ("fred_diesel", "Gasoil / diesel", "EIA/FRED - DDFUELNYH", "quotidienne"),
-            ("alpha_brent", "Pétrole Brent", "Alpha Vantage - BRENT", "quotidienne"),
+            ("fred_brent", "Pétrole Brent", "EIA/FRED - DCOILBRENTEU", "quotidienne"),
             ("internal_bitumen", "Bitume", "Devis et factures internes", "à la demande"),
             ("fred_asphalt", "Indice bitume/asphalte", "FRED - PCU324121324121", "mensuelle"),
         ]
@@ -92,6 +95,42 @@ class Database:
             "INSERT OR IGNORE INTO data_sources(code, label, provider, frequency) VALUES(?,?,?,?)",
             rows,
         )
+
+    @staticmethod
+    def _seed_real_data(conn: sqlite3.Connection) -> int:
+        """Load the reproducible FRED/EIA snapshot bundled with the project."""
+        if not REAL_DATA_PATH.exists():
+            return 0
+        previous: dict[str, float] = {}
+        imported = 0
+        with REAL_DATA_PATH.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                source_date = str(row.get("date") or "")[:10]
+                if not source_date:
+                    continue
+                for product, column, unit, source in (
+                    ("gasoil", "gasoil", "USD/gallon", "EIA/FRED - DDFUELNYH"),
+                    ("brent", "brent", "USD/baril", "EIA/FRED - DCOILBRENTEU"),
+                ):
+                    raw_value = row.get(column)
+                    if raw_value in (None, "", "."):
+                        continue
+                    price = float(raw_value)
+                    prior = previous.get(product)
+                    variation = round(price - prior, 6) if prior is not None else None
+                    variation_pct = round((variation / prior) * 100, 4) if prior else None
+                    conn.execute(
+                        """INSERT INTO price_observations
+                        (product, price, unit, currency, source, source_date, collected_at,
+                         variation, variation_pct, is_unchanged, notes)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                        (product, price, unit, "USD", source, source_date,
+                         f"{source_date}T12:00:00+00:00", variation, variation_pct, 0,
+                         "Historique réel EIA importé depuis FRED; horodatage de collecte approximé pour le backfill."),
+                    )
+                    previous[product] = price
+                    imported += 1
+        return imported
 
     @staticmethod
     def _seed_demo(conn: sqlite3.Connection) -> None:
@@ -118,7 +157,9 @@ class Database:
     def seed_if_empty(self) -> None:
         with self.connect() as conn:
             if conn.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0] == 0:
-                self._seed_demo(conn)
+                imported = self._seed_real_data(conn)
+                if imported == 0 and DEMO_MODE:
+                    self._seed_demo(conn)
 
     def insert_observation(self, payload: dict[str, Any]) -> dict[str, Any]:
         product = str(payload.get("product", "")).lower().strip()
@@ -188,7 +229,7 @@ class Database:
             return [dict(r) for r in rows]
 
     def dashboard(self, days: int = 30) -> dict[str, Any]:
-        rows = self.observations(days=days)
+        rows = self.observations(days=days, limit=100_000)
         latest = self.latest()
         by_product: dict[str, list[dict[str, Any]]] = {p: [] for p in PRODUCTS}
         for row in rows:
