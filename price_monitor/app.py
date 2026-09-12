@@ -48,7 +48,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/" or parsed.path == "/index.html":
             return self.serve_file(ROOT / "templates" / "index.html", "text/html; charset=utf-8")
         if parsed.path.startswith("/static/"):
-            candidate = (ROOT / parsed.path.removeprefix("/static/")).resolve()
+            candidate = (ROOT / parsed.path.lstrip("/")).resolve()
             if ROOT / "static" in candidate.parents:
                 return self.serve_file(candidate, mimetypes.guess_type(candidate.name)[0] or "application/octet-stream")
         query = parse_qs(parsed.query)
@@ -111,4 +111,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

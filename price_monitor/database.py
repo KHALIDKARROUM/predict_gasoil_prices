@@ -206,9 +206,20 @@ class Database:
                 "average": round(sum(values) / len(values), 4) if values else None,
                 "count": len(values),
             }
-        return {"days": days, "metrics": metrics, "latest": latest, "series": by_product, "demo_mode": DEMO_MODE}
+        active_sources = {row["source"] for row in rows if row.get("source")}
+        return {
+            "days": days,
+            "metrics": metrics,
+            "latest": latest,
+            "series": by_product,
+            "quality": {
+                "score": 100 if rows else 0,
+                "source_count": len(active_sources),
+                "observation_count": len(rows),
+            },
+            "demo_mode": DEMO_MODE,
+        }
 
     def logs(self, limit: int = 12) -> list[dict[str, Any]]:
         with self.connect() as conn:
             return [dict(r) for r in conn.execute("SELECT * FROM collection_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
-

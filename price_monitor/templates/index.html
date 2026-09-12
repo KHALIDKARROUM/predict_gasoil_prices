@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Tableau de bord de suivi des prix internationaux du gasoil, du Brent et du bitume">
+  <meta name="theme-color" content="#071923">
   <title>Price Monitor · Suivi des prix</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,11 +13,12 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Aller au contenu principal</a>
   <div class="app-shell">
-    <aside class="sidebar">
+    <aside class="sidebar" aria-label="Navigation principale">
       <div class="brand"><span class="brand-mark">↗</span><span>Price<br><strong>Monitor</strong></span></div>
       <div class="side-caption">CENTRE DE PILOTAGE</div>
-      <nav>
+      <nav aria-label="Sections du tableau de bord">
         <a class="nav-item active" href="#overview"><span>◈</span> Vue d'ensemble</a>
         <a class="nav-item" href="#history"><span>◷</span> Historique</a>
         <a class="nav-item" href="#manual"><span>＋</span> Saisie bitume</a>
@@ -28,10 +30,10 @@
       </div>
     </aside>
 
-    <main class="content">
+    <main class="content" id="main-content">
       <header class="topbar">
         <div><p class="eyebrow">MONITORING / MARCHÉS INTERNATIONAUX</p><h1>Suivi des prix</h1></div>
-        <div class="top-actions"><span class="live-pill"><i></i> Système opérationnel</span><button class="icon-button" id="refresh-btn" title="Actualiser">↻</button><div class="avatar">KK</div></div>
+        <div class="top-actions"><span class="live-pill" id="system-status" role="status"><i></i> Système opérationnel</span><button class="icon-button" id="refresh-btn" title="Actualiser les données" aria-label="Actualiser les données">↻</button><div class="avatar" aria-label="Profil KK">KK</div></div>
       </header>
 
       <section id="overview" class="hero-row">
@@ -46,13 +48,14 @@
 
       <section class="grid-2 main-panels">
         <article class="panel chart-panel">
-          <div class="panel-heading"><div><p class="eyebrow">TENDANCE COMPARÉE</p><h2>Évolution des prix</h2></div><div class="legend" id="legend"></div></div>
+          <div class="panel-heading"><div><p class="eyebrow">TENDANCE COMPARÉE</p><h2>Évolution des prix</h2></div><div class="chart-tools"><div class="chart-mode" role="group" aria-label="Mode d'affichage"><button type="button" class="mode-btn" data-chart-mode="absolute" aria-pressed="false">Prix</button><button type="button" class="mode-btn active" data-chart-mode="indexed" aria-pressed="true">Base 100</button></div><div class="legend" id="legend"></div></div></div>
           <div class="chart-wrap"><canvas id="price-chart"></canvas></div>
+          <p class="chart-note" id="chart-note">Évolution relative depuis le premier relevé de la période.</p>
         </article>
         <article class="panel quality-panel" id="sources">
           <div class="panel-heading"><div><p class="eyebrow">CONTRÔLE QUALITÉ</p><h2>État des données</h2></div><span class="status-badge">● En ligne</span></div>
           <div class="quality-score"><div class="score-ring"><strong id="quality-score">100</strong><span>/100</span></div><div><strong>Qualité globale</strong><p>Sources suivies et relevés contrôlés</p></div></div>
-          <div class="quality-list"><div><span class="check">✓</span><span>Dates de publication conservées</span><b id="source-count">3 sources</b></div><div><span class="check">✓</span><span>Unités et devises normalisées</span><b>USD</b></div><div><span class="check">✓</span><span>Doublons signalés</span><b>Actif</b></div></div>
+          <div class="quality-list"><div><span class="check">✓</span><span>Dates de publication conservées</span><b id="source-count">3 sources</b></div><div><span class="check">✓</span><span>Unités et devises normalisées</span><b>USD</b></div><div><span class="check">✓</span><span>Relevés analysés</span><b id="observation-count">—</b></div></div>
         </article>
       </section>
 
