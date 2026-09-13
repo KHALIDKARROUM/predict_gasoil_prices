@@ -32,7 +32,7 @@ def test_collect_all_keeps_successful_source_when_another_source_fails(monkeypat
     assert messages == ["Brent service unavailable"]
 
 
-def test_partial_collection_is_persisted_and_logged_as_success(empty_database, monkeypatch):
+def test_partial_collection_is_persisted_and_logged_as_partial(empty_database, monkeypatch):
     monkeypatch.setattr(
         scheduler_module,
         "collect_all",
@@ -42,13 +42,13 @@ def test_partial_collection_is_persisted_and_logged_as_success(empty_database, m
     result = scheduler_module.run_collection(empty_database)
 
     assert result == {
-        "status": "success",
+        "status": "partial",
         "rows": 1,
         "message": "Brent service unavailable",
     }
     assert len(empty_database.observations(days=3650)) == 1
     log = empty_database.logs(limit=1)[0]
-    assert log["status"] == "success"
+    assert log["status"] == "partial"
     assert log["rows_collected"] == 1
     assert log["message"] == "Brent service unavailable"
 
@@ -89,7 +89,7 @@ def test_collection_updates_source_health_and_quality_score(empty_database, monk
 
     result = scheduler_module.run_collection(empty_database)
 
-    assert result["status"] == "success"
+    assert result["status"] == "partial"
     health = {row["code"]: row for row in empty_database.source_health()}
     assert health["fred_diesel"]["last_success_at"]
     assert health["fred_diesel"]["last_error"] is None
