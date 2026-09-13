@@ -11,6 +11,27 @@ const formatPct = (value) => value == null ? '—' : `${Number(value) >= 0 ? '+'
 const formatDate = (value, withTime = false) => value ? new Date(value).toLocaleString('fr-FR', withTime ? { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' } : { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 const formatNumber = (value, digits = 2) => Number(value).toLocaleString('fr-FR', { maximumFractionDigits: digits });
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+const API_KEY_STORAGE = 'priceMonitorApiKey';
+
+function getStoredApiKey() {
+  try { return sessionStorage.getItem(API_KEY_STORAGE) || ''; } catch { return ''; }
+}
+
+function storeApiKey(value) {
+  try { sessionStorage.setItem(API_KEY_STORAGE, value); } catch { /* Private browsing may disable storage. */ }
+}
+
+async function protectedFetch(url, options = {}, allowPrompt = true, overrideApiKey = '') {
+  const headers = new Headers(options.headers || {});
+  const apiKey = overrideApiKey || getStoredApiKey();
+  if (apiKey) headers.set('X-API-Key', apiKey);
+  const response = await fetch(url, { ...options, headers });
+  if (response.status !== 401 || !allowPrompt) return response;
+  const enteredKey = window.prompt('Cette action nécessite la clé API Price Monitor :');
+  if (!enteredKey?.trim()) return response;
+  storeApiKey(enteredKey.trim());
+  return protectedFetch(url, options, false, enteredKey.trim());
+}
 
 function setSystemStatus(message, kind = '') {
   const status = $('#system-status');
@@ -94,7 +115,7 @@ document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('cl
 
 $('#period-select').addEventListener('change', loadDashboard);
 $('#refresh-btn').addEventListener('click', () => { loadDashboard(); loadLogs(); showToast('Tableau de bord actualisé.'); });
-$('#collect-btn').addEventListener('click', async () => { const button = $('#collect-btn'); button.disabled = true; button.innerHTML = 'Collecte en cours…'; try { const response = await fetch('/api/collect', { method: 'POST', headers: { 'Content-Type': 'application/json' } }); const result = await response.json(); if (!response.ok || result.status === 'error') throw new Error(result.message || 'La collecte a échoué.'); showToast(`${result.rows} relevé(s) enregistré(s).`); } catch (error) { showToast(error.message, true); } finally { button.disabled = false; button.innerHTML = '<span>↻</span> Lancer une collecte'; loadDashboard(); loadLogs(); } });
-$('#bitumen-form').addEventListener('submit', async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); data.product = 'bitume'; data.unit = 'USD/tonne'; try { const response = await fetch('/api/observations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Échec de l’enregistrement.'); showToast('Relevé bitume enregistré avec succès.'); event.target.reset(); event.target.source_date.value = new Date().toISOString().slice(0, 10); loadDashboard(); } catch (error) { showToast(error.message, true); } });
+$('#collect-btn').addEventListener('click', async () => { const button = $('#collect-btn'); button.disabled = true; button.innerHTML = 'Collecte en cours…'; try { const response = await protectedFetch('/api/collect', { method: 'POST', headers: { 'Content-Type': 'application/json' } }); const result = await response.json(); if (!response.ok || result.status === 'error') throw new Error(result.message || result.error || 'La collecte a échoué.'); showToast(`${result.rows} relevé(s) enregistré(s).`); } catch (error) { showToast(error.message, true); } finally { button.disabled = false; button.innerHTML = '<span>↻</span> Lancer une collecte'; loadDashboard(); loadLogs(); } });
+$('#bitumen-form').addEventListener('submit', async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); data.product = 'bitume'; data.unit = 'USD/tonne'; try { const response = await protectedFetch('/api/observations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Échec de l’enregistrement.'); showToast('Relevé bitume enregistré avec succès.'); event.target.reset(); event.target.source_date.value = new Date().toISOString().slice(0, 10); loadDashboard(); } catch (error) { showToast(error.message, true); } });
 $('#bitumen-form').source_date.value = new Date().toISOString().slice(0, 10);
 loadDashboard(); loadLogs();

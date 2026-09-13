@@ -29,6 +29,24 @@ def _load_dotenv(path: Path) -> None:
 _load_dotenv(PROJECT_DIR / ".env")
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name, str(default)).strip()
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} doit être un entier positif") from exc
+    if value <= 0:
+        raise ValueError(f"{name} doit être un entier positif")
+    return value
+
+
 @dataclass(frozen=True)
 class MySQLSettings:
     host: str
@@ -63,8 +81,16 @@ MYSQL_SETTINGS = MySQLSettings(
     charset=os.getenv("MYSQL_CHARSET", "utf8mb4"),
 )
 
-HOST = os.getenv("PRICE_MONITOR_HOST", "127.0.0.1")
+HOST = os.getenv("PRICE_MONITOR_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("PRICE_MONITOR_PORT", "8080"))
+ENVIRONMENT = os.getenv("PRICE_MONITOR_ENV", "development").strip().lower() or "development"
+API_KEY = os.getenv("PRICE_MONITOR_API_KEY", "").strip()
+RATE_LIMIT_REQUESTS = _env_positive_int("PRICE_MONITOR_RATE_LIMIT_REQUESTS", 60)
+RATE_LIMIT_WINDOW_SECONDS = _env_positive_int("PRICE_MONITOR_RATE_LIMIT_WINDOW_SECONDS", 60)
+RATE_LIMIT_ENABLED = (
+    ENVIRONMENT in {"production", "prod"}
+    or _env_bool("PRICE_MONITOR_RATE_LIMIT_ENABLED")
+)
 DEMO_MODE = os.getenv("PRICE_MONITOR_DEMO", "false").lower() in {"1", "true", "yes", "on"}
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "")

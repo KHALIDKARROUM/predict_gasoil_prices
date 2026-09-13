@@ -60,13 +60,25 @@ Les séries Brent et gasoil sont conservées dans leurs unités publiées respec
 
 ## API locale
 
+Les routes d'écriture et l'historique détaillé sont protégés par une clé API. Définissez `PRICE_MONITOR_API_KEY` dans `.env` avec une valeur longue et aléatoire, puis envoyez-la avec `X-API-Key` ou `Authorization: Bearer <clé>`. La clé n'est jamais acceptée dans l'URL.
+
+```powershell
+$bytes = [byte[]]::new(32)
+[Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+$env:PRICE_MONITOR_API_KEY = [Convert]::ToBase64String($bytes)
+```
+
+Sans clé configurée, `/api/collect` et `/api/observations` répondent avec une erreur de configuration. En production (`PRICE_MONITOR_ENV=production`), le démarrage est refusé tant que la clé n'est pas définie. Le tableau de bord demande la clé au premier appel protégé et la conserve uniquement dans la session du navigateur.
+
 | Méthode | Route | Rôle |
 |---|---|---|
 | GET | `/api/dashboard?days=30` | indicateurs, séries et derniers relevés |
-| GET | `/api/observations?product=bitume` | historique filtré |
-| POST | `/api/collect` | déclenche une collecte immédiate |
-| POST | `/api/observations` | ajoute une observation validée |
+| GET | `/api/observations?product=bitume` | historique filtré (clé API) |
+| POST | `/api/collect` | déclenche une collecte immédiate (clé API) |
+| POST | `/api/observations` | ajoute une observation validée (clé API) |
 | GET | `/export.csv` / `/export.xlsx` | exports |
+
+En production, une limitation en mémoire s'applique par adresse cliente : 60 requêtes par fenêtre de 60 secondes par défaut. Ajustez `PRICE_MONITOR_RATE_LIMIT_REQUESTS` et `PRICE_MONITOR_RATE_LIMIT_WINDOW_SECONDS` si nécessaire.
 
 Exemple de saisie bitume :
 
