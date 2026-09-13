@@ -32,6 +32,47 @@ def test_insert_observation_calculates_variation_and_unchanged_publication(empty
     assert empty_database.observations(product="gasoil", days=3650)[-1]["id"] == second["id"]
 
 
+def test_insert_observation_is_idempotent_for_an_exact_retry(empty_database):
+    payload = observation_payload("gasoil", 2.4, "2026-09-13", "2026-09-13T12:00:00+00:00")
+
+    first = empty_database.insert_observation(payload)
+    retry = empty_database.insert_observation(
+        {**payload, "collected_at": "2026-09-13T13:00:00+00:00", "notes": "Retry"}
+    )
+
+    assert retry["id"] == first["id"]
+    assert len(empty_database.observations(days=3650)) == 1
+
+
+@pytest.mark.parametrize(
+    "field, value, message",
+    [
+        ("source_date", "2026-02-30", "date source"),
+        ("source_date", "2026-09-13T00:00:00+00:00", "format YYYY-MM-DD"),
+        ("collected_at", "2026-09-13", "date de collecte"),
+        ("collected_at", "2026-02-30T12:00:00+00:00", "date de collecte"),
+    ],
+)
+def test_insert_observation_rejects_invalid_dates(empty_database, field, value, message):
+    payload = observation_payload("gasoil", 2.4, "2026-09-13", "2026-09-13T12:00:00+00:00")
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        empty_database.insert_observation(payload)
+
+    assert empty_database.observations(days=3650) == []
+
+
+def test_insert_observation_rejects_a_unit_that_does_not_match_the_product(empty_database):
+    payload = observation_payload("gasoil", 2.4, "2026-09-13", "2026-09-13T12:00:00+00:00")
+    payload["unit"] = "USD/baril"
+
+    with pytest.raises(ValueError, match="Unité invalide"):
+        empty_database.insert_observation(payload)
+
+    assert empty_database.observations(days=3650) == []
+
+
 @pytest.mark.parametrize(
     "payload, message",
     [

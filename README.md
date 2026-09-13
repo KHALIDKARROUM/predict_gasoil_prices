@@ -8,7 +8,7 @@ Application de suivi des prix internationaux du gasoil, du Brent et du bitume, c
 - historique réel de cinq ans pour le Brent et le gasoil, issu des séries EIA publiées par FRED ;
 - connecteurs FRED (séries `DCOILBRENTEU` et `DDFUELNYH`) et Alpha Vantage (`BRENT`) via variables d'environnement ;
 - stockage SQLite ou MySQL 8 sélectionnable dans `.env`, avec migrations suivies dans `sql/mysql_migrations/` ;
-- contrôle de qualité, unités normalisées, date de publication distincte de la date de collecte, variation absolue et en pourcentage ;
+- contrôle de qualité, validation stricte des dates et unités, déduplication idempotente, date de publication distincte de la date de collecte, variation absolue et en pourcentage ;
 - saisie validée des devis, commandes ou factures de bitume ;
 - tableau de bord responsive, graphiques de tendance, moyennes/minimums/maximums, journal des collectes ;
 - exports CSV et Excel `.xlsx` ;
@@ -85,6 +85,8 @@ Exemple de saisie bitume :
 ```json
 {"product":"bitume","price":528.5,"unit":"USD/tonne","source":"Devis Fournisseur ABC","source_date":"2026-09-08","notes":"FOB Méditerranée"}
 ```
+
+`source_date` doit respecter le format `YYYY-MM-DD` et `collected_at`, lorsqu'il est fourni, doit être un horodatage ISO 8601 avec fuseau. L'unité doit correspondre à celle du produit. Une nouvelle tentative avec le même produit, la même source, la même date source et le même prix réutilise l'observation existante.
 
 ## Passage en production
 

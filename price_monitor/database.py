@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import csv
+import math
+import re
 import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
@@ -39,7 +41,8 @@ CREATE TABLE IF NOT EXISTS price_observations (
     variation_pct REAL,
     is_unchanged INTEGER NOT NULL DEFAULT 0,
     notes TEXT DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(product, source, source_date, price)
 );
 CREATE INDEX IF NOT EXISTS idx_observations_product_date
   ON price_observations(product, collected_at);
@@ -147,9 +150,56 @@ class SQLiteDatabase:
     def _datetime_value(value: str) -> str:
         return value
 
+    @staticmethod
+    def _source_date_value(value: Any) -> str:
+        """Validate and normalize a publication date without silently truncating it."""
+        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError("La date source doit être au format YYYY-MM-DD.")
+        try:
+            return date.fromisoformat(value).isoformat()
+        except ValueError:
+            raise ValueError("La date source doit être une date calendaire valide.") from None
+
+    @staticmethod
+    def _collected_at_value(value: Any) -> str:
+        """Validate an ISO-8601 timestamp and store it in a comparable UTC form."""
+        if not isinstance(value, str) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})",
+            value,
+        ):
+            raise ValueError("La date de collecte doit être un horodatage ISO 8601 avec fuseau.")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("La date de collecte doit être un horodatage ISO 8601 valide.") from None
+        if parsed.tzinfo is None:
+            raise ValueError("La date de collecte doit inclure un fuseau horaire.")
+        return parsed.astimezone(timezone.utc).isoformat()
+
+    @staticmethod
+    def _deduplicate_observations(connection: Any) -> None:
+        """Keep the first row before adding the identity index to older databases."""
+        connection.execute(
+            """DELETE FROM price_observations
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM price_observations
+                GROUP BY product, source, source_date, price
+            )"""
+        )
+
+    @staticmethod
+    def _ensure_observation_identity(connection: Any) -> None:
+        connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_observation_identity
+            ON price_observations(product, source, source_date, price)"""
+        )
+
     def initialize(self) -> None:
         with self._lock, self.connect() as conn:
             conn.executescript(SCHEMA)
+            self._deduplicate_observations(conn)
+            self._ensure_observation_identity(conn)
             self._seed_sources(conn)
             count = conn.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0]
             if count == 0:
@@ -240,16 +290,36 @@ class SQLiteDatabase:
             price = float(payload.get("price"))
         except (TypeError, ValueError):
             raise ValueError("Le prix doit être numérique.") from None
-        if price <= 0 or price > 1_000_000:
+        if not math.isfinite(price) or price <= 0 or price > 1_000_000:
             raise ValueError("Le prix doit être compris entre 0 et 1 000 000.")
-        source_date = str(payload.get("source_date") or datetime.now(timezone.utc).date().isoformat())[:10]
-        collected_at = self._datetime_value(
-            str(payload.get("collected_at") or datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+        source_date_input = payload.get("source_date")
+        source_date = self._source_date_value(
+            datetime.now(timezone.utc).date().isoformat() if source_date_input is None else source_date_input
         )
-        unit = str(payload.get("unit") or PRODUCTS[product]["unit"])
+        collected_at_input = payload.get("collected_at")
+        collected_at = self._datetime_value(
+            self._collected_at_value(
+                datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+                if collected_at_input is None
+                else collected_at_input
+            )
+        )
+        unit_input = payload.get("unit")
+        unit = PRODUCTS[product]["unit"] if unit_input is None else unit_input
+        if not isinstance(unit, str) or unit.strip() != PRODUCTS[product]["unit"]:
+            raise ValueError(f"Unité invalide pour {product}. Utilisez {PRODUCTS[product]['unit']}.")
+        unit = unit.strip()
         source = str(payload.get("source") or "Saisie validée")[:150]
         notes = str(payload.get("notes") or "")[:500]
         with self._lock, self.connect() as conn:
+            existing = conn.execute(
+                """SELECT * FROM price_observations
+                WHERE product=? AND source=? AND source_date=? AND price=?
+                ORDER BY id LIMIT 1""",
+                (product, source, source_date, price),
+            ).fetchone()
+            if existing:
+                return dict(existing)
             previous = conn.execute(
                 "SELECT price, source_date FROM price_observations WHERE product=? ORDER BY collected_at DESC LIMIT 1",
                 (product,),
@@ -263,14 +333,27 @@ class SQLiteDatabase:
             unchanged = 1 if previous and previous_source_date == source_date else 0
             if unchanged:
                 notes = (notes + " | Publication source inchangée.").strip(" |")
-            cur = conn.execute(
-                """INSERT INTO price_observations
-                (product, price, unit, currency, source, source_date, collected_at,
-                 variation, variation_pct, is_unchanged, notes)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                (product, price, unit, "USD", source, source_date, collected_at,
-                 variation, variation_pct, unchanged, notes),
-            )
+            try:
+                cur = conn.execute(
+                    """INSERT INTO price_observations
+                    (product, price, unit, currency, source, source_date, collected_at,
+                     variation, variation_pct, is_unchanged, notes)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (product, price, unit, "USD", source, source_date, collected_at,
+                     variation, variation_pct, unchanged, notes),
+                )
+            except Exception:
+                # Another worker may have inserted the same observation after the
+                # pre-insert lookup. The unique identity index makes that race safe.
+                existing = conn.execute(
+                    """SELECT * FROM price_observations
+                    WHERE product=? AND source=? AND source_date=? AND price=?
+                    ORDER BY id LIMIT 1""",
+                    (product, source, source_date, price),
+                ).fetchone()
+                if existing:
+                    return dict(existing)
+                raise
             record = conn.execute("SELECT * FROM price_observations WHERE id=?", (cur.lastrowid,)).fetchone()
             return dict(record)
 
@@ -427,6 +510,8 @@ class MySQLDatabase(SQLiteDatabase):
         with self.connect() as connection:
             connection.executescript(MYSQL_SCHEMA)
             run_mysql_migrations(connection)
+            self._deduplicate_mysql_observations(connection)
+            self._ensure_mysql_observation_identity(connection)
             self._seed_sources(connection)
             count = connection.execute("SELECT COUNT(*) AS count FROM price_observations").fetchone()["count"]
             if count == 0:
@@ -445,6 +530,30 @@ class MySQLDatabase(SQLiteDatabase):
             "INSERT IGNORE INTO data_sources(code, label, provider, frequency) VALUES(?,?,?,?)",
             rows,
         )
+
+    @staticmethod
+    def _deduplicate_mysql_observations(connection: _MySQLConnection) -> None:
+        connection.execute(
+            """DELETE newer FROM price_observations AS newer
+            INNER JOIN price_observations AS older
+              ON older.product = newer.product
+             AND older.source = newer.source
+             AND older.source_date = newer.source_date
+             AND older.price = newer.price
+             AND older.id < newer.id"""
+        )
+
+    @staticmethod
+    def _ensure_mysql_observation_identity(connection: _MySQLConnection) -> None:
+        indexes = connection.execute(
+            "SHOW INDEX FROM price_observations WHERE Key_name=?",
+            ("uq_observation_identity",),
+        ).fetchall()
+        if not indexes:
+            connection.execute(
+                """ALTER TABLE price_observations
+                ADD UNIQUE KEY uq_observation_identity(product, source, source_date, price)"""
+            )
 
 
 # Backwards-compatible name for callers that explicitly want the SQLite backend.

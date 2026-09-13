@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS price_observations (
   is_unchanged BOOLEAN NOT NULL DEFAULT FALSE,
   notes VARCHAR(500) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_observation_identity (product, source, source_date, price),
   INDEX idx_product_collected (product, collected_at)
 );
 
