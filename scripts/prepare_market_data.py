@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -16,12 +15,12 @@ OUTPUT_PATH = ROOT / "data" / "processed" / "market_prices.csv"
 
 SERIES = {
     "brent": {
-        "file": "EIA_PET_RBRTE_D.json",
-        "url": "https://api.db.nomics.world/v22/series/EIA/PET/RBRTE.D?observations=1",
+        "file": "FRED_DCOILBRENTEU.csv",
+        "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU",
     },
     "gasoil": {
-        "file": "EIA_PET_DIESEL_NYH_D.json",
-        "url": "https://api.db.nomics.world/v22/series/EIA/PET/EER_EPD2DXL0_PF4_Y35NY_DPG.D?observations=1",
+        "file": "FRED_DDFUELNYH.csv",
+        "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DDFUELNYH",
     },
 }
 
@@ -33,16 +32,29 @@ def download(url: str, destination: Path) -> None:
 
 
 def read_series(path: Path) -> dict[str, float]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    document = payload["series"]["docs"][0]
     values: dict[str, float] = {}
-    for period, raw_value in zip(document["period"], document["value"]):
-        if raw_value in (None, "", "."):
-            continue
-        try:
-            values[str(period)[:10]] = float(str(raw_value).replace(",", "."))
-        except ValueError:
-            continue
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        rows = csv.DictReader(handle)
+        if not rows.fieldnames:
+            raise RuntimeError(f"En-têtes absents dans {path.name}.")
+        date_field = "observation_date" if "observation_date" in rows.fieldnames else rows.fieldnames[0]
+        value_fields = [field for field in rows.fieldnames if field != date_field]
+        if not value_fields:
+            raise RuntimeError(f"Valeur absente dans {path.name}.")
+        value_field = value_fields[0]
+        source_rows = rows
+        for row in source_rows:
+            period = row.get(date_field)
+            raw_value = row.get(value_field)
+            if not period:
+                continue
+            period = str(period)[:10]
+            if raw_value in (None, "", "."):
+                continue
+            try:
+                values[period] = float(str(raw_value).replace(",", "."))
+            except ValueError:
+                continue
     return values
 
 

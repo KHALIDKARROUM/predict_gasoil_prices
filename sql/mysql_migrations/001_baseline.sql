@@ -1,0 +1,2 @@
+-- Baseline marker for databases created from mysql_schema.sql.
+-- The migration runner records this version after the base schema is applied.

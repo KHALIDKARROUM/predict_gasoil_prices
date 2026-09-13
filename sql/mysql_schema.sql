@@ -1,6 +1,5 @@
 -- Schéma de production MySQL 8 pour Price Monitor.
-CREATE DATABASE IF NOT EXISTS price_monitor CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE price_monitor;
+-- La base cible est sélectionnée par la configuration MYSQL_DATABASE.
 
 CREATE TABLE IF NOT EXISTS price_observations (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -39,3 +38,7 @@ CREATE TABLE IF NOT EXISTS collection_logs (
   message VARCHAR(500) NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version VARCHAR(32) PRIMARY KEY,
+  applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

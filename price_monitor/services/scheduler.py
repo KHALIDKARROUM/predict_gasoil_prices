@@ -5,14 +5,14 @@ import time
 from datetime import datetime, timezone
 
 from ..config import COLLECTION_TIMES
-from ..database import Database
+from ..database import DatabaseBackend
 from .collectors import collect_all
 
 
 class CollectionScheduler:
     """Lightweight cron-compatible scheduler; production can also call /api/collect from cron."""
 
-    def __init__(self, database: Database):
+    def __init__(self, database: DatabaseBackend):
         self.database = database
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -37,7 +37,7 @@ class CollectionScheduler:
                 run_collection(self.database)
 
 
-def run_collection(database: Database) -> dict:
+def run_collection(database: DatabaseBackend) -> dict:
     started = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     try:
         observations, messages = collect_all()
@@ -51,4 +51,3 @@ def run_collection(database: Database) -> dict:
         finished = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         database.log_collection("error", 0, str(exc), started, finished)
         return {"status": "error", "rows": 0, "message": str(exc)}
-

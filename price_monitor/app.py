@@ -10,13 +10,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .config import HOST, PORT
-from .database import Database, PRODUCTS
+from .database import PRODUCTS, create_database
 from .services.export import csv_bytes, xlsx_bytes
 from .services.scheduler import CollectionScheduler, run_collection
 
 
 ROOT = Path(__file__).resolve().parent
-database = Database()
+database = create_database()
 scheduler = CollectionScheduler(database)
 
 

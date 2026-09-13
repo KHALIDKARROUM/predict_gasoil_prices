@@ -7,7 +7,7 @@ Application de suivi des prix internationaux du gasoil, du Brent et du bitume, c
 - collecte manuelle ou planifiée cinq fois par jour à **08:00, 11:00, 14:00, 17:00 et 20:00** ;
 - historique réel de cinq ans pour le Brent et le gasoil, issu des séries EIA publiées par FRED ;
 - connecteurs FRED (séries `DCOILBRENTEU` et `DDFUELNYH`) et Alpha Vantage (`BRENT`) via variables d'environnement ;
-- stockage local SQLite prêt à démarrer, avec schéma MySQL 8 fourni dans `sql/mysql_schema.sql` ;
+- stockage SQLite ou MySQL 8 sélectionnable dans `.env`, avec migrations suivies dans `sql/mysql_migrations/` ;
 - contrôle de qualité, unités normalisées, date de publication distincte de la date de collecte, variation absolue et en pourcentage ;
 - saisie validée des devis, commandes ou factures de bitume ;
 - tableau de bord responsive, graphiques de tendance, moyennes/minimums/maximums, journal des collectes ;
@@ -27,6 +27,18 @@ python -m price_monitor.app
 ```
 
 Puis ouvrir `http://127.0.0.1:8080`.
+
+Pour utiliser MySQL, copiez `.env.example` vers `.env`, configurez `PRICE_MONITOR_DB_BACKEND=mysql` ainsi que `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER` et `MYSQL_PASSWORD`. L'application crée la base configurée si le compte possède ce droit, applique `sql/mysql_schema.sql`, puis exécute les migrations non encore enregistrées.
+
+## Tests
+
+Installer les dépendances puis lancer la suite automatisée :
+
+```powershell
+..\.venv\Scripts\python.exe -m pytest
+```
+
+Les tests couvrent la validation et la persistance SQLite, les calculs du tableau de bord, les exports CSV/Excel, l'import du snapshot réel EIA/FRED, les collectes complètes, partielles ou en échec, ainsi que le schéma et le moteur de migrations MySQL. Pour exécuter aussi le test d'intégration MySQL, définissez `RUN_MYSQL_TESTS=1` avec des paramètres `.env` valides.
 
 Le projet démarre avec un snapshot réel de cinq ans dans `data/processed/market_prices.csv`, sans clé API. Pour actualiser les fichiers source et reconstruire le snapshot :
 
@@ -64,4 +76,4 @@ Exemple de saisie bitume :
 
 ## Passage en production
 
-Le fichier `sql/mysql_schema.sql` contient la structure MySQL correspondant aux trois tables du rapport : `price_observations`, `data_sources` et `collection_logs`. Le stockage SQLite intégré est parfait pour le prototype et la soutenance ; pour un déploiement entreprise, brancher la couche de persistance sur MySQL et appeler `/api/collect` depuis cron ou le planificateur du serveur.
+Le fichier `sql/mysql_schema.sql` contient la structure MySQL correspondant aux tables du rapport : `price_observations`, `data_sources`, `collection_logs` et `schema_migrations`. Le stockage SQLite intégré reste le défaut local ; MySQL peut être activé sans modifier les routes de l'application.
