@@ -86,7 +86,7 @@ async function loadDashboard() {
   try {
     const response = await fetch(`/api/dashboard?days=${days}`); if (!response.ok) throw new Error('Impossible de charger le tableau de bord.');
     const data = await response.json(); renderMetrics(data.metrics); renderChart(data.series); renderLatest(data.latest);
-    $('#quality-score').textContent = data.quality?.score ?? 100;
+    $('#quality-score').textContent = data.quality?.score ?? '—';
     $('#mode-label').textContent = data.demo_mode ? 'Démonstration active' : 'Production / API';
     $('#last-update').textContent = data.latest.length ? formatDate(data.latest.reduce((a, b) => new Date(a.collected_at) > new Date(b.collected_at) ? a : b).collected_at, true) : '—';
     $('#source-count').textContent = `${data.quality?.source_count ?? data.latest.length} sources`;

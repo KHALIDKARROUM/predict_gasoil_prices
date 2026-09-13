@@ -80,6 +80,10 @@ class DatabaseBackend(Protocol):
 
     def log_collection(self, status: str, rows: int, message: str, started_at: str, finished_at: str) -> None: ...
 
+    def update_source_health(self, source_code: str, success: bool, at: str, error: str | None = None) -> None: ...
+
+    def source_health(self) -> list[dict[str, Any]]: ...
+
     def latest(self) -> list[dict[str, Any]]: ...
 
     def observations(self, product: str | None = None, days: int = 30, limit: int = 600) -> list[dict[str, Any]]: ...
@@ -211,6 +215,7 @@ class SQLiteDatabase:
         rows = [
             ("fred_diesel", "Gasoil / diesel", "EIA/FRED - DDFUELNYH", "quotidienne"),
             ("fred_brent", "Pétrole Brent", "EIA/FRED - DCOILBRENTEU", "quotidienne"),
+            ("alpha_brent", "Pétrole Brent", "Alpha Vantage - BRENT", "quotidienne"),
             ("internal_bitumen", "Bitume", "Devis et factures internes", "à la demande"),
             ("fred_asphalt", "Indice bitume/asphalte", "FRED - PCU324121324121", "mensuelle"),
         ]
@@ -364,6 +369,34 @@ class SQLiteDatabase:
                 (self._datetime_value(started_at), self._datetime_value(finished_at), status, rows, message[:500]),
             )
 
+    def update_source_health(
+        self,
+        source_code: str,
+        success: bool,
+        at: str,
+        error: str | None = None,
+    ) -> None:
+        """Persist the latest outcome for one configured source."""
+        with self._lock, self.connect() as conn:
+            if success:
+                conn.execute(
+                    "UPDATE data_sources SET last_success_at=?, last_error=NULL WHERE code=?",
+                    (self._datetime_value(at), source_code),
+                )
+            else:
+                conn.execute(
+                    "UPDATE data_sources SET last_error=? WHERE code=?",
+                    (str(error or "Échec de collecte")[:500], source_code),
+                )
+
+    def source_health(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT code, label, provider, frequency, active, last_success_at, last_error
+                FROM data_sources WHERE active=1 ORDER BY id"""
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def latest(self) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
@@ -410,18 +443,89 @@ class SQLiteDatabase:
                 "count": len(values),
             }
         active_sources = {row["source"] for row in rows if row.get("source")}
+        source_health = self.source_health()
+        quality_score = self._quality_score(rows, source_health)
         return {
             "days": days,
             "metrics": metrics,
             "latest": latest,
             "series": by_product,
             "quality": {
-                "score": 100 if rows else 0,
+                "score": quality_score,
                 "source_count": len(active_sources),
                 "observation_count": len(rows),
             },
+            "source_health": source_health,
             "demo_mode": DEMO_MODE,
         }
+
+    @classmethod
+    def _quality_score(cls, rows: list[dict[str, Any]], sources: list[dict[str, Any]]) -> int:
+        """Score stored data and the health of sources that have been checked.
+
+        Sources that have never been collected are intentionally excluded from
+        the health denominator: manually maintained and not-yet-configured
+        sources should not make an otherwise valid dataset look unhealthy.
+        """
+        if not rows:
+            return 0
+
+        valid_rows = sum(cls._observation_is_valid(row) for row in rows)
+        data_score = (valid_rows / len(rows)) * 100
+
+        monitored = [
+            source
+            for source in sources
+            if source.get("last_success_at") is not None or source.get("last_error")
+        ]
+        if not monitored:
+            source_score = 100.0
+        else:
+            healthy = sum(cls._source_is_healthy(source) for source in monitored)
+            source_score = (healthy / len(monitored)) * 100
+
+        return max(0, min(100, round((data_score + source_score) / 2)))
+
+    @staticmethod
+    def _observation_is_valid(row: dict[str, Any]) -> bool:
+        required = ("product", "price", "unit", "currency", "source", "source_date", "collected_at")
+        if any(row.get(field) in (None, "") for field in required):
+            return False
+        try:
+            price = float(row["price"])
+            if price <= 0 or not math.isfinite(price):
+                return False
+            date.fromisoformat(str(row["source_date"])[:10])
+            collected_at = row["collected_at"]
+            if isinstance(collected_at, datetime):
+                parsed = collected_at
+            else:
+                parsed = datetime.fromisoformat(str(collected_at).replace("Z", "+00:00"))
+            return parsed.tzinfo is not None or isinstance(collected_at, datetime)
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    @staticmethod
+    def _source_is_healthy(source: dict[str, Any]) -> bool:
+        if source.get("last_error") or not source.get("last_success_at"):
+            return False
+        try:
+            value = source["last_success_at"]
+            if isinstance(value, datetime):
+                success_at = value
+                if success_at.tzinfo is None:
+                    success_at = success_at.replace(tzinfo=timezone.utc)
+            else:
+                success_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                if success_at.tzinfo is None:
+                    success_at = success_at.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - success_at.astimezone(timezone.utc)
+            freshness_window = {"quotidienne": timedelta(days=2), "mensuelle": timedelta(days=62)}.get(
+                str(source.get("frequency", "")).lower(), timedelta(days=365)
+            )
+            return age <= freshness_window
+        except (TypeError, ValueError, OverflowError):
+            return False
 
     def logs(self, limit: int = 12) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -523,6 +627,7 @@ class MySQLDatabase(SQLiteDatabase):
         rows = [
             ("fred_diesel", "Gasoil / diesel", "EIA/FRED - DDFUELNYH", "quotidienne"),
             ("fred_brent", "Pétrole Brent", "EIA/FRED - DCOILBRENTEU", "quotidienne"),
+            ("alpha_brent", "Pétrole Brent", "Alpha Vantage - BRENT", "quotidienne"),
             ("internal_bitumen", "Bitume", "Devis et factures internes", "à la demande"),
             ("fred_asphalt", "Indice bitume/asphalte", "FRED - PCU324121324121", "mensuelle"),
         ]

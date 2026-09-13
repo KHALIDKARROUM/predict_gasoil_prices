@@ -9,6 +9,39 @@ from ..database import DatabaseBackend
 from .collectors import collect_all
 
 
+SOURCE_CODE_BY_LABEL = {
+    "EIA/FRED - DDFUELNYH": "fred_diesel",
+    "EIA/FRED - DCOILBRENTEU": "fred_brent",
+    "Alpha Vantage - BRENT": "alpha_brent",
+}
+
+
+def _observation_source_health(observations: list[dict]) -> list[dict]:
+    """Infer source success for compatible/custom collectors without metadata."""
+    outcomes: list[dict] = []
+    for observation in observations:
+        code = observation.get("source_code") or SOURCE_CODE_BY_LABEL.get(observation.get("source"))
+        if code:
+            outcomes.append({"code": code, "success": True, "error": None})
+    return outcomes
+
+
+def _update_source_health(database: DatabaseBackend, outcomes: list[dict], at: str) -> None:
+    updater = getattr(database, "update_source_health", None)
+    if updater is None:
+        return
+    for outcome in outcomes:
+        code = outcome.get("code")
+        if not code:
+            continue
+        updater(
+            str(code),
+            bool(outcome.get("success")),
+            at,
+            str(outcome.get("error")) if outcome.get("error") else None,
+        )
+
+
 class CollectionScheduler:
     """Lightweight cron-compatible scheduler; production can also call /api/collect from cron."""
 
@@ -39,15 +72,22 @@ class CollectionScheduler:
 
 def run_collection(database: DatabaseBackend) -> dict:
     started = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    source_outcomes: list[dict] = []
     try:
-        observations, messages = collect_all()
+        batch = collect_all()
+        observations, messages = batch
+        source_outcomes = list(getattr(batch, "source_health", [])) or _observation_source_health(observations)
         for observation in observations:
             database.insert_observation(observation)
         finished = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        _update_source_health(database, source_outcomes, finished)
         message = " ".join(messages) or "Collecte terminée avec succès."
         database.log_collection("success", len(observations), message, started, finished)
         return {"status": "success", "rows": len(observations), "message": message}
     except Exception as exc:
         finished = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        if not source_outcomes:
+            source_outcomes = list(getattr(exc, "source_health", []))
+        _update_source_health(database, source_outcomes, finished)
         database.log_collection("error", 0, str(exc), started, finished)
         return {"status": "error", "rows": 0, "message": str(exc)}

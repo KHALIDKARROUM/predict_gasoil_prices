@@ -6,8 +6,35 @@ import random
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from typing import Any
 
 from ..config import ALPHA_VANTAGE_API_KEY, DEMO_MODE, FRED_API_KEY
+
+
+class CollectionBatch(tuple):
+    """A backwards-compatible pair with per-source outcomes attached."""
+
+    source_health: list[dict[str, Any]]
+
+    def __new__(
+        cls,
+        observations: list[dict],
+        messages: list[str],
+        source_health: list[dict[str, Any]],
+    ) -> "CollectionBatch":
+        result = super().__new__(cls, (observations, messages))
+        result.source_health = source_health
+        return result
+
+
+class CollectionError(RuntimeError):
+    """Raised when every configured source fails, retaining source outcomes."""
+
+    source_health: list[dict[str, Any]]
+
+    def __init__(self, message: str, source_health: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.source_health = source_health
 
 
 def _request_json(url: str) -> dict:
@@ -22,7 +49,7 @@ def collect_gasoil() -> dict:
         data = _request_json(f"https://api.stlouisfed.org/fred/series/observations?{query}")
         for obs in data.get("observations", []):
             if obs.get("value") not in (None, "."):
-                return {"product": "gasoil", "price": float(obs["value"]), "unit": "USD/gallon", "source": "EIA/FRED - DDFUELNYH", "source_date": obs["date"], "notes": "Collecte API FRED"}
+                return {"product": "gasoil", "price": float(obs["value"]), "unit": "USD/gallon", "source": "EIA/FRED - DDFUELNYH", "source_code": "fred_diesel", "source_date": obs["date"], "notes": "Collecte API FRED"}
     raise RuntimeError("FRED_API_KEY non configurée")
 
 
@@ -32,7 +59,7 @@ def collect_brent() -> dict:
         data = _request_json(f"https://api.stlouisfed.org/fred/series/observations?{query}")
         for obs in data.get("observations", []):
             if obs.get("value") not in (None, "."):
-                return {"product": "brent", "price": float(obs["value"]), "unit": "USD/baril", "source": "EIA/FRED - DCOILBRENTEU", "source_date": obs["date"], "notes": "Collecte API FRED"}
+                return {"product": "brent", "price": float(obs["value"]), "unit": "USD/baril", "source": "EIA/FRED - DCOILBRENTEU", "source_code": "fred_brent", "source_date": obs["date"], "notes": "Collecte API FRED"}
     if ALPHA_VANTAGE_API_KEY:
         query = urlencode({"function": "BRENT", "interval": "daily", "apikey": ALPHA_VANTAGE_API_KEY, "datatype": "json"})
         data = _request_json(f"https://www.alphavantage.co/query?{query}")
@@ -41,7 +68,7 @@ def collect_brent() -> dict:
             date = obs.get("date") or obs.get("timestamp")
             value = obs.get("value") or obs.get("price")
             if date and value not in (None, "."):
-                return {"product": "brent", "price": float(value), "unit": "USD/baril", "source": "Alpha Vantage - BRENT", "source_date": date[:10], "notes": "Collecte API Alpha Vantage"}
+                return {"product": "brent", "price": float(value), "unit": "USD/baril", "source": "Alpha Vantage - BRENT", "source_code": "alpha_brent", "source_date": date[:10], "notes": "Collecte API Alpha Vantage"}
     raise RuntimeError("FRED_API_KEY ou ALPHA_VANTAGE_API_KEY non configurée")
 
 
@@ -59,14 +86,21 @@ def demo_observations() -> list[dict]:
 def collect_all() -> tuple[list[dict], list[str]]:
     observations: list[dict] = []
     messages: list[str] = []
-    for collector in (collect_gasoil, collect_brent):
+    source_health: list[dict[str, Any]] = []
+    for source_code, collector in (("fred_diesel", collect_gasoil), ("fred_brent", collect_brent)):
         try:
-            observations.append(collector())
+            observation = collector()
+            observations.append(observation)
+            source_health.append({"code": observation.get("source_code") or source_code, "success": True, "error": None})
         except Exception as exc:  # source failure must not stop the other source
             messages.append(str(exc))
+            source_health.append({"code": source_code, "success": False, "error": str(exc)})
     if DEMO_MODE:
         observations = demo_observations()
         messages.append("Mode démonstration actif.")
     elif not observations:
-        raise RuntimeError("Aucune source publique disponible. Configurez FRED_API_KEY pour actualiser les données.")
-    return observations, messages
+        raise CollectionError(
+            "Aucune source publique disponible. Configurez FRED_API_KEY pour actualiser les données.",
+            source_health,
+        )
+    return CollectionBatch(observations, messages, source_health)

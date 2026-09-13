@@ -73,6 +73,42 @@ def test_failed_collection_is_logged_without_persisting_rows(empty_database, mon
     assert log["message"] == "All market sources unavailable"
 
 
+def test_collection_updates_source_health_and_quality_score(empty_database, monkeypatch):
+    monkeypatch.setattr(
+        scheduler_module,
+        "collect_all",
+        lambda: collectors_module.CollectionBatch(
+            [gasoil_observation()],
+            ["Brent service unavailable"],
+            [
+                {"code": "fred_diesel", "success": True, "error": None},
+                {"code": "fred_brent", "success": False, "error": "Brent service unavailable"},
+            ],
+        ),
+    )
+
+    result = scheduler_module.run_collection(empty_database)
+
+    assert result["status"] == "success"
+    health = {row["code"]: row for row in empty_database.source_health()}
+    assert health["fred_diesel"]["last_success_at"]
+    assert health["fred_diesel"]["last_error"] is None
+    assert health["fred_brent"]["last_success_at"] is None
+    assert health["fred_brent"]["last_error"] == "Brent service unavailable"
+    assert empty_database.dashboard(days=30)["quality"]["score"] < 100
+
+
+def test_successful_collection_clears_previous_source_error(empty_database):
+    empty_database.update_source_health(
+        "fred_diesel", False, "2026-09-13T11:00:00+00:00", "temporary outage"
+    )
+    empty_database.update_source_health("fred_diesel", True, "2026-09-13T12:00:00+00:00")
+
+    source = next(row for row in empty_database.source_health() if row["code"] == "fred_diesel")
+    assert source["last_success_at"] == "2026-09-13T12:00:00+00:00"
+    assert source["last_error"] is None
+
+
 def test_collect_all_fails_when_no_source_succeeds_and_demo_mode_is_off(monkeypatch):
     monkeypatch.setattr(collectors_module, "DEMO_MODE", False)
     monkeypatch.setattr(
