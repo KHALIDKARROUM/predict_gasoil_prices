@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 from ..config import COLLECTION_TIMES
 from ..database import DatabaseBackend
+from ..observability import logger, metrics
+from .alerts import AlertManager
 from .collectors import collect_all
 
 
@@ -80,15 +82,44 @@ class CollectionScheduler:
     def stop(self) -> None:
         self._stop.set()
 
+    @property
+    def is_running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
     def _run(self) -> None:
         last_slot = None
+        last_health_check = 0.0
         while not self._stop.wait(20):
             now = datetime.now().astimezone()
+            if time.monotonic() - last_health_check >= 300:
+                last_health_check = time.monotonic()
+                evaluate_source_alerts(self.database)
             slot = now.strftime("%H:%M")
             token = now.date().isoformat() + slot
             if slot in COLLECTION_TIMES and token != last_slot:
                 last_slot = token
-                run_collection(self.database)
+                try:
+                    run_collection(self.database)
+                except Exception:
+                    # The scheduler must survive a single failed scheduled run.
+                    logger.exception("Scheduled collection failed", extra={"event": "collection_scheduler_error"})
+
+
+def evaluate_source_alerts(database: DatabaseBackend) -> None:
+    """Check source freshness even when a scheduled collection is missed."""
+    try:
+        AlertManager(database).evaluate_sources(database.source_health())
+    except Exception:
+        # Alerting must never stop the collection scheduler.
+        logger.exception("Source alert evaluation failed", extra={"event": "source_alert_evaluation_failed"})
+
+
+def _evaluate_collection_alerts(database: DatabaseBackend, observations: list[dict]) -> None:
+    try:
+        AlertManager(database).evaluate_collection(observations, database.source_health())
+    except Exception:
+        # Alerting must never turn a successful collection into an error.
+        logger.exception("Collection alert evaluation failed", extra={"event": "collection_alert_evaluation_failed"})
 
 
 def run_collection(database: DatabaseBackend) -> dict:
@@ -107,6 +138,12 @@ def run_collection(database: DatabaseBackend) -> dict:
         message = " ".join(messages) or "Collecte terminée avec succès."
         status = _collection_status(observations, messages, source_outcomes, has_source_metadata)
         database.log_collection(status, len(observations), message, started, finished)
+        _evaluate_collection_alerts(database, observations)
+        metrics.increment("price_monitor_collection_total", labels={"status": status})
+        logger.info(
+            "Collection completed",
+            extra={"event": "collection_completed", "status": status, "rows": len(observations)},
+        )
         return {"status": status, "rows": len(observations), "message": message}
     except Exception as exc:
         finished = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -114,4 +151,7 @@ def run_collection(database: DatabaseBackend) -> dict:
             source_outcomes = list(getattr(exc, "source_health", []))
         _update_source_health(database, source_outcomes, finished)
         database.log_collection("error", 0, str(exc), started, finished)
+        _evaluate_collection_alerts(database, [])
+        metrics.increment("price_monitor_collection_total", labels={"status": "error"})
+        logger.exception("Collection failed", extra={"event": "collection_failed"})
         return {"status": "error", "rows": 0, "message": str(exc)}

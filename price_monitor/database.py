@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import csv
 import math
+import os
 import re
 import sqlite3
 import threading
@@ -24,6 +25,12 @@ PRODUCTS = {
     "gasoil": {"label": "Gasoil / diesel", "unit": "USD/gallon", "color": "#5eead4"},
     "brent": {"label": "Pétrole Brent", "unit": "USD/baril", "color": "#f9b35c"},
     "bitume": {"label": "Bitume", "unit": "USD/tonne", "color": "#a78bfa"},
+}
+
+PURCHASE_UNITS = {
+    "gasoil": "gallon",
+    "brent": "baril",
+    "bitume": "tonne",
 }
 
 
@@ -64,13 +71,50 @@ CREATE TABLE IF NOT EXISTS collection_logs (
     rows_collected INTEGER NOT NULL DEFAULT 0,
     message TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS alert_states (
+    alert_key TEXT PRIMARY KEY,
+    active INTEGER NOT NULL DEFAULT 0,
+    last_value REAL,
+    last_notified_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS procurement_purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product TEXT NOT NULL CHECK(product IN ('gasoil', 'brent', 'bitume')),
+    supplier TEXT NOT NULL,
+    quantity REAL NOT NULL CHECK(quantity > 0),
+    unit TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    unit_price REAL NOT NULL CHECK(unit_price > 0),
+    exchange_rate REAL NOT NULL CHECK(exchange_rate > 0),
+    transport_cost REAL NOT NULL DEFAULT 0 CHECK(transport_cost >= 0),
+    budget_amount REAL,
+    purchase_date TEXT NOT NULL,
+    total_cost REAL NOT NULL,
+    total_cost_usd REAL NOT NULL,
+    budget_variance REAL,
+    budget_variance_usd REAL,
+    market_price_usd REAL,
+    price_impact_unit_usd REAL,
+    price_impact_total_usd REAL,
+    price_impact_pct REAL,
+    notes TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_procurement_purchase_date
+  ON procurement_purchases(purchase_date, product);
 """
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MYSQL_SCHEMA_PATH = PROJECT_ROOT / "sql" / "mysql_schema.sql"
-MYSQL_MIGRATIONS_DIR = PROJECT_ROOT / "sql" / "mysql_migrations"
+PACKAGE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = PACKAGE_DIR.parent
+SQL_ROOT = Path(os.getenv("PRICE_MONITOR_SQL_DIR", PROJECT_ROOT / "sql"))
+if not (SQL_ROOT / "mysql_schema.sql").exists():
+    SQL_ROOT = PACKAGE_DIR
+MYSQL_SCHEMA_PATH = SQL_ROOT / "mysql_schema.sql"
+MYSQL_MIGRATIONS_DIR = SQL_ROOT / "mysql_migrations"
 MYSQL_SCHEMA = MYSQL_SCHEMA_PATH.read_text(encoding="utf-8")
+SQLITE_MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 
 class DatabaseBackend(Protocol):
@@ -91,6 +135,47 @@ class DatabaseBackend(Protocol):
     def dashboard(self, days: int = 30) -> dict[str, Any]: ...
 
     def logs(self, limit: int = 12) -> list[dict[str, Any]]: ...
+
+    def get_alert_state(self, alert_key: str) -> dict[str, Any] | None: ...
+
+    def set_alert_state(
+        self,
+        alert_key: str,
+        active: bool,
+        last_value: float | None,
+        updated_at: str,
+        last_notified_at: str | None = None,
+    ) -> None: ...
+
+    def create_procurement(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+    def procurements(self, limit: int = 100) -> list[dict[str, Any]]: ...
+
+    def history(
+        self,
+        product: str | None = None,
+        supplier: str | None = None,
+        source: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        min_price: float | None = None,
+        max_price: float | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]: ...
+
+    def compare_periods(
+        self,
+        period_a_from: str,
+        period_a_to: str,
+        period_b_from: str,
+        period_b_to: str,
+        product: str | None = None,
+        supplier: str | None = None,
+        source: str | None = None,
+        min_price: float | None = None,
+        max_price: float | None = None,
+    ) -> dict[str, Any]: ...
 
 
 def _split_sql_script(script: str) -> list[str]:
@@ -122,6 +207,27 @@ def run_mysql_migrations(connection: Any, migrations_dir: Path = MYSQL_MIGRATION
         )"""
     )
     applied = {row["version"] for row in connection.execute("SELECT version FROM schema_migrations").fetchall()}
+    newly_applied: list[str] = []
+    for migration in sorted(migrations_dir.glob("*.sql")):
+        version = migration.stem.split("_", 1)[0]
+        if not version or version in applied:
+            continue
+        for statement in _split_sql_script(migration.read_text(encoding="utf-8")):
+            connection.execute(statement)
+        connection.execute("INSERT INTO schema_migrations(version) VALUES(?)", (version,))
+        newly_applied.append(version)
+    return newly_applied
+
+
+def run_sqlite_migrations(connection: sqlite3.Connection, migrations_dir: Path = SQLITE_MIGRATIONS_DIR) -> list[str]:
+    """Apply numbered SQLite migrations and record them for repeatable deploys."""
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS schema_migrations (
+            version TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    applied = {row[0] for row in connection.execute("SELECT version FROM schema_migrations").fetchall()}
     newly_applied: list[str] = []
     for migration in sorted(migrations_dir.glob("*.sql")):
         version = migration.stem.split("_", 1)[0]
@@ -202,6 +308,7 @@ class SQLiteDatabase:
     def initialize(self) -> None:
         with self._lock, self.connect() as conn:
             conn.executescript(SCHEMA)
+            run_sqlite_migrations(conn)
             self._deduplicate_observations(conn)
             self._ensure_observation_identity(conn)
             self._seed_sources(conn)
@@ -210,6 +317,12 @@ class SQLiteDatabase:
                 imported = self._seed_real_data(conn)
                 if imported == 0 and DEMO_MODE:
                     self._seed_demo(conn)
+
+    def healthcheck(self) -> dict[str, str]:
+        """Verify that the configured database accepts a simple read."""
+        with self.connect() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return {"status": "ok", "backend": "sqlite"}
 
     def _seed_sources(self, conn: sqlite3.Connection) -> None:
         rows = [
@@ -315,6 +428,9 @@ class SQLiteDatabase:
             raise ValueError(f"Unité invalide pour {product}. Utilisez {PRODUCTS[product]['unit']}.")
         unit = unit.strip()
         source = str(payload.get("source") or "Saisie validée")[:150]
+        supplier = str(payload.get("supplier") or "").strip()[:150]
+        if not supplier and product == "bitume":
+            supplier = source
         notes = str(payload.get("notes") or "")[:500]
         with self._lock, self.connect() as conn:
             existing = conn.execute(
@@ -341,10 +457,10 @@ class SQLiteDatabase:
             try:
                 cur = conn.execute(
                     """INSERT INTO price_observations
-                    (product, price, unit, currency, source, source_date, collected_at,
+                    (product, price, unit, currency, source, supplier, source_date, collected_at,
                      variation, variation_pct, is_unchanged, notes)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                    (product, price, unit, "USD", source, source_date, collected_at,
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (product, price, unit, "USD", source, supplier, source_date, collected_at,
                      variation, variation_pct, unchanged, notes),
                 )
             except Exception:
@@ -361,6 +477,273 @@ class SQLiteDatabase:
                 raise
             record = conn.execute("SELECT * FROM price_observations WHERE id=?", (cur.lastrowid,)).fetchone()
             return dict(record)
+
+    def create_procurement(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a purchase estimate and compare it with the latest USD market price."""
+        product = str(payload.get("product", "")).lower().strip()
+        if product not in PRODUCTS:
+            raise ValueError("Produit inconnu. Utilisez gasoil, brent ou bitume.")
+
+        supplier = str(payload.get("supplier") or "").strip()
+        if not supplier:
+            raise ValueError("Le fournisseur est obligatoire.")
+        supplier = supplier[:150]
+
+        def positive_number(field: str, label: str, default: float | None = None) -> float:
+            raw = payload.get(field, default)
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"{label} doit être numérique.") from None
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{label} doit être supérieur à zéro.")
+            return value
+
+        quantity = positive_number("quantity", "La quantité")
+        unit = str(payload.get("unit") or PURCHASE_UNITS[product]).strip().lower()
+        if unit != PURCHASE_UNITS[product]:
+            raise ValueError(f"Unité invalide pour {product}. Utilisez {PURCHASE_UNITS[product]}.")
+        currency = str(payload.get("currency") or "USD").strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", currency):
+            raise ValueError("La devise doit être un code ISO de trois lettres, par exemple USD ou EUR.")
+        unit_price = positive_number("unit_price", "Le prix unitaire")
+
+        exchange_input = payload.get("exchange_rate")
+        if exchange_input in (None, "") and currency == "USD":
+            exchange_input = 1
+        try:
+            exchange_rate = float(exchange_input)
+        except (TypeError, ValueError):
+            raise ValueError("Le taux de change doit être numérique.") from None
+        if not math.isfinite(exchange_rate) or exchange_rate <= 0:
+            raise ValueError("Le taux de change doit être supérieur à zéro.")
+
+        try:
+            transport_cost = float(payload.get("transport_cost") or 0)
+        except (TypeError, ValueError):
+            raise ValueError("Le transport doit être numérique.") from None
+        if not math.isfinite(transport_cost) or transport_cost < 0:
+            raise ValueError("Le transport doit être positif ou nul.")
+
+        budget_raw = payload.get("budget_amount")
+        budget_amount: float | None
+        if budget_raw in (None, ""):
+            budget_amount = None
+        else:
+            try:
+                budget_amount = float(budget_raw)
+            except (TypeError, ValueError):
+                raise ValueError("Le budget doit être numérique.") from None
+            if not math.isfinite(budget_amount) or budget_amount < 0:
+                raise ValueError("Le budget doit être positif ou nul.")
+
+        purchase_date = self._source_date_value(
+            datetime.now(timezone.utc).date().isoformat()
+            if payload.get("purchase_date") is None
+            else payload.get("purchase_date")
+        )
+        notes = str(payload.get("notes") or "")[:500]
+        total_cost = round(quantity * unit_price + transport_cost, 6)
+        total_cost_usd = round(total_cost * exchange_rate, 6)
+        budget_variance = round(total_cost - budget_amount, 6) if budget_amount is not None else None
+        budget_variance_usd = round(budget_variance * exchange_rate, 6) if budget_variance is not None else None
+
+        with self._lock, self.connect() as conn:
+            market_row = conn.execute(
+                """SELECT price FROM price_observations
+                WHERE product=? ORDER BY collected_at DESC LIMIT 1""",
+                (product,),
+            ).fetchone()
+            market_price_usd = float(market_row["price"]) if market_row else None
+            unit_price_usd = unit_price * exchange_rate
+            price_impact_unit_usd = (
+                round(unit_price_usd - market_price_usd, 6) if market_price_usd is not None else None
+            )
+            price_impact_total_usd = (
+                round(price_impact_unit_usd * quantity, 6)
+                if price_impact_unit_usd is not None
+                else None
+            )
+            price_impact_pct = (
+                round((price_impact_unit_usd / market_price_usd) * 100, 4)
+                if price_impact_unit_usd is not None and market_price_usd
+                else None
+            )
+            created_at = self._datetime_value(datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+            cur = conn.execute(
+                """INSERT INTO procurement_purchases
+                (product, supplier, quantity, unit, currency, unit_price, exchange_rate,
+                 transport_cost, budget_amount, purchase_date, total_cost, total_cost_usd,
+                 budget_variance, budget_variance_usd, market_price_usd, price_impact_unit_usd,
+                 price_impact_total_usd, price_impact_pct, notes, created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    product, supplier, quantity, unit, currency, unit_price, exchange_rate,
+                    transport_cost, budget_amount, purchase_date, total_cost, total_cost_usd,
+                    budget_variance, budget_variance_usd, market_price_usd, price_impact_unit_usd,
+                    price_impact_total_usd, price_impact_pct, notes, created_at,
+                ),
+            )
+            record = conn.execute(
+                "SELECT * FROM procurement_purchases WHERE id=?", (cur.lastrowid,)
+            ).fetchone()
+            return dict(record)
+
+    def procurements(self, limit: int = 100) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 1000))
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM procurement_purchases
+                ORDER BY purchase_date DESC, id DESC LIMIT ?""",
+                (safe_limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def history(
+        self,
+        product: str | None = None,
+        supplier: str | None = None,
+        source: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        min_price: float | None = None,
+        max_price: float | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        clauses, params = self._history_filters(
+            product, supplier, source, date_from, date_to, min_price, max_price
+        )
+        page = max(1, int(page))
+        page_size = max(1, min(int(page_size), 10_000))
+        where = " AND ".join(clauses) if clauses else "1=1"
+        offset = (page - 1) * page_size
+        with self.connect() as conn:
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM price_observations WHERE {where}", params
+            ).fetchone()
+            rows = conn.execute(
+                f"""SELECT * FROM price_observations WHERE {where}
+                ORDER BY source_date DESC, collected_at DESC, id DESC LIMIT ? OFFSET ?""",
+                [*params, page_size, offset],
+            ).fetchall()
+        total = int(total_row["count"] if isinstance(total_row, sqlite3.Row) else total_row["count"])
+        return {
+            "items": [dict(row) for row in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": math.ceil(total / page_size) if total else 0,
+        }
+
+    def compare_periods(
+        self,
+        period_a_from: str,
+        period_a_to: str,
+        period_b_from: str,
+        period_b_to: str,
+        product: str | None = None,
+        supplier: str | None = None,
+        source: str | None = None,
+        min_price: float | None = None,
+        max_price: float | None = None,
+    ) -> dict[str, Any]:
+        period_a_from = self._source_date_value(period_a_from)
+        period_a_to = self._source_date_value(period_a_to)
+        period_b_from = self._source_date_value(period_b_from)
+        period_b_to = self._source_date_value(period_b_to)
+        if period_a_from > period_a_to or period_b_from > period_b_to:
+            raise ValueError("La date de début doit précéder la date de fin.")
+
+        first = self.history(
+            product, supplier, source, period_a_from, period_a_to, min_price, max_price,
+            page=1, page_size=10_000,
+        )["items"]
+        second = self.history(
+            product, supplier, source, period_b_from, period_b_to, min_price, max_price,
+            page=1, page_size=10_000,
+        )["items"]
+
+        def summarize(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+            result: dict[str, dict[str, Any]] = {}
+            for key in PRODUCTS:
+                values = [float(row["price"]) for row in rows if row["product"] == key]
+                result[key] = {
+                    "count": len(values),
+                    "average": round(sum(values) / len(values), 6) if values else None,
+                    "min": min(values) if values else None,
+                    "max": max(values) if values else None,
+                }
+            return result
+
+        first_summary = summarize(first)
+        second_summary = summarize(second)
+        products: dict[str, dict[str, Any]] = {}
+        for key in PRODUCTS:
+            a_average = first_summary[key]["average"]
+            b_average = second_summary[key]["average"]
+            change = round(b_average - a_average, 6) if a_average is not None and b_average is not None else None
+            change_pct = round((change / a_average) * 100, 4) if change is not None and a_average else None
+            products[key] = {
+                "period_a": first_summary[key],
+                "period_b": second_summary[key],
+                "average_change": change,
+                "average_change_pct": change_pct,
+            }
+        return {
+            "period_a": {"from": period_a_from, "to": period_a_to},
+            "period_b": {"from": period_b_from, "to": period_b_to},
+            "products": products,
+        }
+
+    def _history_filters(
+        self,
+        product: str | None,
+        supplier: str | None,
+        source: str | None,
+        date_from: str | None,
+        date_to: str | None,
+        min_price: float | None,
+        max_price: float | None,
+    ) -> tuple[list[str], list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if product:
+            product = product.strip().lower()
+            if product not in PRODUCTS:
+                raise ValueError("Produit inconnu. Utilisez gasoil, brent ou bitume.")
+            clauses.append("product=?")
+            params.append(product)
+        if supplier:
+            clauses.append("supplier LIKE ?")
+            params.append(f"%{supplier.strip()}%")
+        if source:
+            clauses.append("source LIKE ?")
+            params.append(f"%{source.strip()}%")
+        if date_from:
+            clauses.append("source_date >= ?")
+            params.append(self._source_date_value(date_from))
+        if date_to:
+            clauses.append("source_date <= ?")
+            params.append(self._source_date_value(date_to))
+        numeric_filters: list[tuple[str, Any, str]] = [
+            ("price >= ?", min_price, "Le prix minimum"),
+            ("price <= ?", max_price, "Le prix maximum"),
+        ]
+        for clause, raw, label in numeric_filters:
+            if raw is None or raw == "":
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"{label} doit être numérique.") from None
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{label} doit être positif ou nul.")
+            clauses.append(clause)
+            params.append(value)
+        if min_price is not None and max_price is not None and float(min_price) > float(max_price):
+            raise ValueError("Le prix minimum doit être inférieur au prix maximum.")
+        return clauses, params
 
     def log_collection(self, status: str, rows: int, message: str, started_at: str, finished_at: str) -> None:
         with self.connect() as conn:
@@ -531,6 +914,42 @@ class SQLiteDatabase:
         with self.connect() as conn:
             return [dict(r) for r in conn.execute("SELECT * FROM collection_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
 
+    def get_alert_state(self, alert_key: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT alert_key, active, last_value, last_notified_at, updated_at FROM alert_states WHERE alert_key=?",
+                (alert_key,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def set_alert_state(
+        self,
+        alert_key: str,
+        active: bool,
+        last_value: float | None,
+        updated_at: str,
+        last_notified_at: str | None = None,
+    ) -> None:
+        with self._lock, self.connect() as conn:
+            notified_value = self._datetime_value(last_notified_at) if last_notified_at else None
+            existing = conn.execute(
+                "SELECT alert_key FROM alert_states WHERE alert_key=?", (alert_key,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """UPDATE alert_states
+                    SET active=?, last_value=?, last_notified_at=COALESCE(?, last_notified_at), updated_at=?
+                    WHERE alert_key=?""",
+                    (int(active), last_value, notified_value, self._datetime_value(updated_at), alert_key),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO alert_states
+                    (alert_key, active, last_value, last_notified_at, updated_at)
+                    VALUES(?,?,?,?,?)""",
+                    (alert_key, int(active), last_value, notified_value, self._datetime_value(updated_at)),
+                )
+
 
 def _get_mysql_connector() -> Any:
     try:
@@ -601,6 +1020,11 @@ class MySQLDatabase(SQLiteDatabase):
     def connect(self) -> _MySQLConnection:
         connector = _get_mysql_connector()
         return _MySQLConnection(connector.connect(**self.settings.connector_kwargs()))
+
+    def healthcheck(self) -> dict[str, str]:
+        with self.connect() as connection:
+            connection.execute("SELECT 1").fetchone()
+        return {"status": "ok", "backend": "mysql"}
 
     @staticmethod
     def _datetime_value(value: str) -> datetime:

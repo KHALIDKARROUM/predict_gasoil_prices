@@ -20,8 +20,9 @@
       <div class="side-caption">CENTRE DE PILOTAGE</div>
       <nav aria-label="Sections du tableau de bord">
         <a class="nav-item active" href="#overview"><span>◈</span> Vue d'ensemble</a>
-        <a class="nav-item" href="#history"><span>◷</span> Historique</a>
+        <a class="nav-item" href="#history-page"><span>◷</span> Historique</a>
         <a class="nav-item" href="#manual"><span>＋</span> Saisie bitume</a>
+        <a class="nav-item" href="#procurement"><span>▣</span> Achats</a>
         <a class="nav-item" href="#sources"><span>◎</span> Sources & qualité</a>
       </nav>
       <div class="sidebar-footer">
@@ -62,6 +63,50 @@
       <section class="panel latest-panel" id="history">
         <div class="panel-heading"><div><p class="eyebrow">DERNIERS RELEVÉS</p><h2>Lecture rapide</h2></div><div class="export-actions"><a href="/export.csv" class="text-btn">↓ CSV</a><a href="/export.xlsx" class="text-btn">↓ Excel</a><a href="#history" class="text-btn muted-link">Voir l'historique →</a></div></div>
         <div class="table-scroll"><table><thead><tr><th>Produit</th><th>Prix actuel</th><th>Variation</th><th>Date source</th><th>Collecté le</th><th>Source</th><th></th></tr></thead><tbody id="latest-table"><tr><td colspan="7" class="empty">Chargement…</td></tr></tbody></table></div>
+      </section>
+
+      <section class="panel history-page" id="history-page">
+        <div class="panel-heading"><div><p class="eyebrow">HISTORIQUE COMPLET</p><h2>Rechercher les relevés</h2></div><span class="activity-count" id="history-count">—</span></div>
+        <form id="history-filters" class="history-filters">
+          <label>Produit<select name="product"><option value="">Tous les produits</option><option value="gasoil">Gasoil / diesel</option><option value="brent">Pétrole Brent</option><option value="bitume">Bitume</option></select></label>
+          <label>Fournisseur<input type="text" name="supplier" placeholder="Rechercher…"></label>
+          <label>Source<input type="text" name="source" placeholder="EIA, FRED, devis…"></label>
+          <label>Date début<input type="date" name="date_from"></label>
+          <label>Date fin<input type="date" name="date_to"></label>
+          <label>Prix minimum<input type="number" name="min_price" min="0" step="0.0001" placeholder="—"></label>
+          <label>Prix maximum<input type="number" name="max_price" min="0" step="0.0001" placeholder="—"></label>
+          <div class="history-filter-actions"><button class="primary-btn" type="submit">Filtrer</button><button class="text-btn history-reset" type="button" id="history-reset">Réinitialiser</button></div>
+        </form>
+        <div class="panel-heading history-toolbar"><div class="pagination" id="history-pagination"><button class="text-btn" type="button" id="history-prev">← Précédent</button><span id="history-page-label">Page 1</span><button class="text-btn" type="button" id="history-next">Suivant →</button></div><div class="export-actions"><a href="/export.csv" id="history-csv" class="text-btn">↓ CSV filtré</a><a href="/export.xlsx" id="history-xlsx" class="text-btn">↓ Excel filtré</a></div></div>
+        <div class="table-scroll"><table><thead><tr><th>Date source</th><th>Produit</th><th>Prix</th><th>Fournisseur</th><th>Source</th><th>Collecté le</th><th>Variation</th></tr></thead><tbody id="history-table"><tr><td colspan="7" class="empty">Utilisez les filtres pour charger l'historique.</td></tr></tbody></table></div>
+      </section>
+
+      <section class="panel compare-panel" id="compare">
+        <div class="panel-heading"><div><p class="eyebrow">COMPARAISON DE PÉRIODES</p><h2>Mesurer l'évolution</h2></div></div>
+        <form id="compare-form" class="compare-form"><div><span>Période A</span><label>Du<input type="date" name="period_a_from" required></label><label>Au<input type="date" name="period_a_to" required></label></div><div><span>Période B</span><label>Du<input type="date" name="period_b_from" required></label><label>Au<input type="date" name="period_b_to" required></label></div><button class="primary-btn" type="submit">Comparer les périodes</button></form>
+        <div class="table-scroll"><table><thead><tr><th>Produit</th><th>Période A · moyenne</th><th>Période B · moyenne</th><th>Variation moyenne</th><th>Relevés A / B</th></tr></thead><tbody id="compare-table"><tr><td colspan="5" class="empty">Choisissez deux périodes à comparer.</td></tr></tbody></table></div>
+      </section>
+
+      <section class="panel procurement-panel" id="procurement">
+        <div class="panel-heading"><div><p class="eyebrow">DÉCISION D'ACHAT</p><h2>Évaluer une commande</h2></div><span class="form-icon">▣</span></div>
+        <p class="panel-intro">Calculez le coût total, l'écart au budget et l'impact du prix par rapport au dernier relevé de marché.</p>
+        <form id="procurement-form">
+          <div class="form-grid">
+            <label>Produit<select name="product" id="procurement-product"><option value="gasoil">Gasoil / diesel</option><option value="brent">Pétrole Brent</option><option value="bitume">Bitume</option></select></label>
+            <label>Fournisseur<input type="text" name="supplier" required maxlength="150" placeholder="Ex. Fournisseur ABC"></label>
+            <label>Quantité <div class="input-wrap"><input type="number" name="quantity" min="0.000001" step="0.001" required placeholder="1000"><span id="quantity-unit">gallon</span></div></label>
+            <label>Date d'achat<input type="date" name="purchase_date" required></label>
+            <label>Devise<select name="currency" id="procurement-currency"><option>USD</option><option>EUR</option><option>GBP</option><option>MAD</option><option>CAD</option></select></label>
+            <label>Prix unitaire <div class="input-wrap"><input type="number" name="unit_price" min="0.000001" step="0.0001" required placeholder="81.40"><span id="unit-price-unit">USD/gallon</span></div></label>
+            <label>Taux de change <input type="number" name="exchange_rate" id="exchange-rate" min="0.000001" step="0.000001" value="1" required><small class="field-help">USD pour 1 unité de la devise</small></label>
+            <label>Transport <input type="number" name="transport_cost" min="0" step="0.01" value="0" placeholder="0"></label>
+            <label>Budget prévu <input type="number" name="budget_amount" min="0" step="0.01" placeholder="Optionnel"></label>
+          </div>
+          <label>Remarque<textarea name="notes" rows="2" maxlength="500" placeholder="Incoterm, référence de commande, conditions…"></textarea></label>
+          <button class="primary-btn" type="submit">Calculer l'impact d'achat <span>→</span></button>
+        </form>
+        <div id="procurement-summary" class="purchase-summary" hidden></div>
+        <div class="table-scroll procurement-history"><table><thead><tr><th>Date</th><th>Produit</th><th>Fournisseur</th><th>Quantité</th><th>Total</th><th>Écart budget</th><th>Impact prix</th></tr></thead><tbody id="procurement-table"><tr><td colspan="7" class="empty">Aucun achat enregistré.</td></tr></tbody></table></div>
       </section>
 
       <section class="grid-2 bottom-panels">

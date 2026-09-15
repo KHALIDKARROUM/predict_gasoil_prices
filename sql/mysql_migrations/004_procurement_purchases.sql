@@ -1,0 +1,25 @@
+-- Store purchase estimates and their market/budget comparisons.
+CREATE TABLE IF NOT EXISTS procurement_purchases (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  product ENUM('gasoil','brent','bitume') NOT NULL,
+  supplier VARCHAR(150) NOT NULL,
+  quantity DECIMAL(18,6) NOT NULL,
+  unit VARCHAR(32) NOT NULL,
+  currency CHAR(3) NOT NULL,
+  unit_price DECIMAL(18,6) NOT NULL,
+  exchange_rate DECIMAL(18,8) NOT NULL,
+  transport_cost DECIMAL(18,6) NOT NULL DEFAULT 0,
+  budget_amount DECIMAL(18,6) NULL,
+  purchase_date DATE NOT NULL,
+  total_cost DECIMAL(18,6) NOT NULL,
+  total_cost_usd DECIMAL(18,6) NOT NULL,
+  budget_variance DECIMAL(18,6) NULL,
+  budget_variance_usd DECIMAL(18,6) NULL,
+  market_price_usd DECIMAL(18,6) NULL,
+  price_impact_unit_usd DECIMAL(18,6) NULL,
+  price_impact_total_usd DECIMAL(18,6) NULL,
+  price_impact_pct DECIMAL(12,4) NULL,
+  notes VARCHAR(500) NULL,
+  created_at DATETIME NOT NULL,
+  INDEX idx_procurement_purchase_date (purchase_date, product)
+);

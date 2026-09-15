@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "price-monitor"
+version = "0.1.0"
+description = "Service de suivi des prix du gasoil, du Brent et du bitume"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Price Monitor contributors" }]
+dependencies = [
+  "openpyxl>=3.1.0",
+  "mysql-connector-python>=9.0.0",
+  "APScheduler>=3.10.0",
+]
+
+[project.optional-dependencies]
+analysis = [
+  "pandas>=2.2.0",
+  "numpy>=1.26.0",
+  "matplotlib>=3.8.0",
+  "seaborn>=0.13.0",
+  "statsmodels>=0.14.0",
+  "jupyter>=1.0.0",
+  "nbformat>=5.9.0",
+]
+test = ["pytest>=8.0.0"]
+dev = ["pytest>=8.0.0", "build>=1.2.0"]
+
+[project.scripts]
+price-monitor = "price_monitor.app:main"
+price-monitor-backup = "price_monitor.backup:main"
+price-monitor-migrate = "price_monitor.migrate:main"
+
+[tool.setuptools.packages.find]
+include = ["price_monitor*"]
+
+[tool.setuptools.package-data]
+price_monitor = ["templates/*.html", "static/*", "migrations/*.sql", "mysql_schema.sql", "mysql_migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["mysql: tests requiring a configured live MySQL server"]

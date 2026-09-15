@@ -1,0 +1,112 @@
+"""OpenAPI 3.0 description for the HTTP API."""
+
+from __future__ import annotations
+
+
+OPENAPI_SPEC = {
+    "openapi": "3.0.3",
+    "info": {
+        "title": "Price Monitor API",
+        "version": "0.1.0",
+        "description": "API de suivi des prix du gasoil, du Brent et du bitume.",
+    },
+    "servers": [{"url": "/", "description": "Serveur courant"}],
+    "tags": [
+        {"name": "health", "description": "Sondes de vie et de disponibilité"},
+        {"name": "market", "description": "Données et collectes de prix"},
+    ],
+    "components": {
+        "securitySchemes": {
+            "ApiKeyHeader": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
+            "BearerAuth": {"type": "http", "scheme": "bearer"},
+        },
+        "schemas": {
+            "ObservationInput": {
+                "type": "object",
+                "required": ["product", "price", "source"],
+                "properties": {
+                    "product": {"type": "string", "enum": ["gasoil", "brent", "bitume"]},
+                    "price": {"type": "number", "exclusiveMinimum": 0},
+                    "unit": {"type": "string", "example": "USD/baril"},
+                    "source": {"type": "string", "maxLength": 150},
+                    "supplier": {"type": "string", "maxLength": 150},
+                    "source_date": {"type": "string", "format": "date"},
+                    "collected_at": {"type": "string", "format": "date-time"},
+                    "notes": {"type": "string", "maxLength": 500},
+                },
+            },
+            "ProcurementInput": {
+                "type": "object",
+                "required": ["product", "supplier", "quantity", "unit_price", "currency", "exchange_rate"],
+                "properties": {
+                    "product": {"type": "string", "enum": ["gasoil", "brent", "bitume"]},
+                    "supplier": {"type": "string", "maxLength": 150},
+                    "quantity": {"type": "number", "exclusiveMinimum": 0},
+                    "unit": {"type": "string", "example": "tonne"},
+                    "currency": {"type": "string", "pattern": "^[A-Z]{3}$", "example": "EUR"},
+                    "unit_price": {"type": "number", "exclusiveMinimum": 0},
+                    "exchange_rate": {"type": "number", "exclusiveMinimum": 0, "description": "USD pour 1 unité de la devise"},
+                    "transport_cost": {"type": "number", "minimum": 0},
+                    "budget_amount": {"type": "number", "minimum": 0},
+                    "purchase_date": {"type": "string", "format": "date"},
+                    "notes": {"type": "string", "maxLength": 500},
+                },
+            },
+            "Error": {"type": "object", "properties": {"error": {"type": "string"}}},
+        },
+    },
+    "paths": {
+        "/health": {
+            "get": {"tags": ["health"], "summary": "Readiness probe", "responses": {"200": {"description": "Service prêt"}, "503": {"description": "Dépendance indisponible"}}}
+        },
+        "/health/live": {
+            "get": {"tags": ["health"], "summary": "Liveness probe", "responses": {"200": {"description": "Processus actif"}}}
+        },
+        "/health/ready": {
+            "get": {"tags": ["health"], "summary": "Readiness probe", "responses": {"200": {"description": "Dépendances disponibles"}, "503": {"description": "Dépendance indisponible"}}}
+        },
+        "/metrics": {
+            "get": {"tags": ["health"], "summary": "Métriques Prometheus", "responses": {"200": {"description": "Métriques au format texte"}}}
+        },
+        "/api/dashboard": {
+            "get": {"tags": ["market"], "summary": "Indicateurs, séries et qualité", "parameters": [{"$ref": "#/components/parameters/Days"}], "responses": {"200": {"description": "Tableau de bord"}}}
+        },
+        "/api/observations": {
+            "get": {"tags": ["market"], "summary": "Historique filtré", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [{"$ref": "#/components/parameters/Product"}, {"$ref": "#/components/parameters/Days"}], "responses": {"200": {"description": "Observations"}, "401": {"description": "Authentification requise"}}},
+            "post": {"tags": ["market"], "summary": "Ajouter une observation", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "requestBody": {"required": True, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ObservationInput"}}}}, "responses": {"201": {"description": "Observation créée"}, "400": {"description": "Entrée invalide", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}}},
+        },
+        "/api/history": {
+            "get": {"tags": ["market"], "summary": "Historique paginé avec filtres", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [
+                {"$ref": "#/components/parameters/Product"},
+                {"$ref": "#/components/parameters/Page"},
+                {"$ref": "#/components/parameters/PageSize"},
+                {"name": "supplier", "in": "query", "schema": {"type": "string"}},
+                {"name": "source", "in": "query", "schema": {"type": "string"}},
+                {"name": "date_from", "in": "query", "schema": {"type": "string", "format": "date"}},
+                {"name": "date_to", "in": "query", "schema": {"type": "string", "format": "date"}},
+                {"name": "min_price", "in": "query", "schema": {"type": "number", "minimum": 0}},
+                {"name": "max_price", "in": "query", "schema": {"type": "number", "minimum": 0}},
+            ], "responses": {"200": {"description": "Historique filtré et paginé"}, "401": {"description": "Authentification requise"}}}
+        },
+        "/api/history/compare": {
+            "get": {"tags": ["market"], "summary": "Comparer deux périodes", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "responses": {"200": {"description": "Comparaison par produit"}, "400": {"description": "Périodes invalides"}, "401": {"description": "Authentification requise"}}}
+        },
+        "/api/collect": {
+            "post": {"tags": ["market"], "summary": "Déclencher une collecte immédiate", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "responses": {"200": {"description": "Résultat de collecte"}, "401": {"description": "Authentification requise"}}}
+        },
+        "/api/logs": {"get": {"tags": ["market"], "summary": "Derniers journaux de collecte", "responses": {"200": {"description": "Journaux"}}}},
+        "/api/procurements": {
+            "get": {"tags": ["market"], "summary": "Historique des achats", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "responses": {"200": {"description": "Achats et impacts calculés"}, "401": {"description": "Authentification requise"}}},
+            "post": {"tags": ["market"], "summary": "Évaluer et enregistrer un achat", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "requestBody": {"required": True, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProcurementInput"}}}}, "responses": {"201": {"description": "Achat enregistré"}, "400": {"description": "Entrée invalide", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}}},
+        },
+        "/export.csv": {"get": {"tags": ["market"], "summary": "Exporter en CSV", "responses": {"200": {"description": "Fichier CSV"}}}},
+        "/export.xlsx": {"get": {"tags": ["market"], "summary": "Exporter en Excel", "responses": {"200": {"description": "Fichier XLSX"}}}},
+    },
+}
+
+OPENAPI_SPEC["components"]["parameters"] = {
+    "Days": {"name": "days", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1825, "default": 30}},
+    "Product": {"name": "product", "in": "query", "schema": {"type": "string", "enum": ["gasoil", "brent", "bitume"]}},
+    "Page": {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1, "default": 1}},
+    "PageSize": {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}},
+}

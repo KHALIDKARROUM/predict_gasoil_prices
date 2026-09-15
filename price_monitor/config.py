@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
-STORAGE_DIR = BASE_DIR / "storage"
+SOURCE_CHECKOUT = (PROJECT_DIR / "pyproject.toml").exists()
+RUNTIME_DIR = PROJECT_DIR if SOURCE_CHECKOUT else Path.cwd()
+STORAGE_DIR = BASE_DIR / "storage" if SOURCE_CHECKOUT else RUNTIME_DIR / "storage"
+BACKUP_DIR = Path(os.getenv("PRICE_MONITOR_BACKUP_DIR", RUNTIME_DIR / "backups"))
 
 
 def _load_dotenv(path: Path) -> None:
@@ -27,6 +31,8 @@ def _load_dotenv(path: Path) -> None:
 
 
 _load_dotenv(PROJECT_DIR / ".env")
+if not SOURCE_CHECKOUT:
+    _load_dotenv(Path.cwd() / ".env")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -45,6 +51,32 @@ def _env_positive_int(name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"{name} doit être un entier positif")
     return value
+
+
+def _env_json_object(name: str) -> dict[str, dict[str, float]]:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return {}
+    try:
+        value = json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} doit contenir un objet JSON valide") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} doit contenir un objet JSON")
+    result: dict[str, dict[str, float]] = {}
+    for product, rules in value.items():
+        if not isinstance(product, str) or not isinstance(rules, dict):
+            raise ValueError(f"{name} contient une règle invalide pour {product!r}")
+        normalized: dict[str, float] = {}
+        for direction, threshold in rules.items():
+            if direction not in {"above", "below"}:
+                raise ValueError(f"{name}: direction inconnue {direction!r}")
+            try:
+                normalized[direction] = float(threshold)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{name}: seuil invalide pour {product}/{direction}") from exc
+        result[product] = normalized
+    return result
 
 
 @dataclass(frozen=True)
@@ -70,7 +102,8 @@ class MySQLSettings:
 
 
 DB_PATH = Path(os.getenv("PRICE_MONITOR_DB", STORAGE_DIR / "price_monitor.db"))
-REAL_DATA_PATH = Path(os.getenv("PRICE_MONITOR_DATA", BASE_DIR.parent / "data" / "processed" / "market_prices.csv"))
+DEFAULT_DATA_PATH = (PROJECT_DIR / "data" / "processed" / "market_prices.csv") if SOURCE_CHECKOUT else (RUNTIME_DIR / "data" / "processed" / "market_prices.csv")
+REAL_DATA_PATH = Path(os.getenv("PRICE_MONITOR_DATA", DEFAULT_DATA_PATH))
 DB_BACKEND = os.getenv("PRICE_MONITOR_DB_BACKEND", "sqlite").strip().lower()
 MYSQL_SETTINGS = MySQLSettings(
     host=os.getenv("MYSQL_HOST", "127.0.0.1"),
@@ -95,3 +128,23 @@ DEMO_MODE = os.getenv("PRICE_MONITOR_DEMO", "false").lower() in {"1", "true", "y
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "")
 COLLECTION_TIMES = ("08:00", "11:00", "14:00", "17:00", "20:00")
+SERVICE_NAME = os.getenv("PRICE_MONITOR_SERVICE_NAME", "price-monitor")
+LOG_LEVEL = os.getenv("PRICE_MONITOR_LOG_LEVEL", "INFO").strip().upper()
+
+# Alerts are opt-in. Thresholds use product keys and ``above``/``below`` rules,
+# for example: {"brent":{"above":90,"below":70},"gasoil":{"above":3.5}}.
+ALERT_THRESHOLDS = _env_json_object("PRICE_MONITOR_ALERT_THRESHOLDS")
+ALERT_WEBHOOK_URL = os.getenv("PRICE_MONITOR_ALERT_WEBHOOK_URL", "").strip()
+ALERT_WEBHOOK_TIMEOUT_SECONDS = _env_positive_int("PRICE_MONITOR_ALERT_WEBHOOK_TIMEOUT_SECONDS", 10)
+ALERT_EMAIL_TO = tuple(
+    address.strip()
+    for address in os.getenv("PRICE_MONITOR_ALERT_EMAIL_TO", "").split(",")
+    if address.strip()
+)
+ALERT_SMTP_HOST = os.getenv("PRICE_MONITOR_ALERT_SMTP_HOST", "").strip()
+ALERT_SMTP_PORT = _env_positive_int("PRICE_MONITOR_ALERT_SMTP_PORT", 587)
+ALERT_SMTP_USER = os.getenv("PRICE_MONITOR_ALERT_SMTP_USER", "").strip()
+ALERT_SMTP_PASSWORD = os.getenv("PRICE_MONITOR_ALERT_SMTP_PASSWORD", "")
+ALERT_SMTP_FROM = os.getenv("PRICE_MONITOR_ALERT_SMTP_FROM", "").strip()
+ALERT_SMTP_USE_TLS = _env_bool("PRICE_MONITOR_ALERT_SMTP_USE_TLS", True)
+ALERT_NOTIFY_RECOVERY = _env_bool("PRICE_MONITOR_ALERT_NOTIFY_RECOVERY", True)

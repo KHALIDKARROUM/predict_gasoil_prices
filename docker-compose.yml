@@ -1,0 +1,45 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PRICE_MONITOR_PORT:-8080}:8080"
+    environment:
+      PRICE_MONITOR_HOST: 0.0.0.0
+      PRICE_MONITOR_PORT: 8080
+      PRICE_MONITOR_ENV: production
+      PRICE_MONITOR_API_KEY: ${PRICE_MONITOR_API_KEY:?Set PRICE_MONITOR_API_KEY in the environment}
+      PRICE_MONITOR_DB_BACKEND: mysql
+      PRICE_MONITOR_BACKUP_DIR: /app/backups
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: price_monitor
+      MYSQL_USER: price_monitor
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in the environment}
+      FRED_API_KEY: ${FRED_API_KEY:-}
+      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+    volumes:
+      - price_monitor_backups:/app/backups
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: price_monitor
+      MYSQL_USER: price_monitor
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in the environment}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in the environment}
+    volumes:
+      - price_monitor_mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  price_monitor_mysql:
+  price_monitor_backups:

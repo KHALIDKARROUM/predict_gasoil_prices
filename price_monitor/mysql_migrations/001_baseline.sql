@@ -1,0 +1,1 @@
+-- Baseline marker for databases created from the packaged MySQL schema.

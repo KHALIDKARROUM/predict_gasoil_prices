@@ -1,0 +1,369 @@
+"""Threshold and source-health alerts with optional webhook and SMTP delivery."""
+
+from __future__ import annotations
+
+import json
+import smtplib
+import ssl
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from math import isfinite
+from typing import Any, Callable, Protocol
+from urllib.request import Request, urlopen
+
+from ..config import (
+    ALERT_EMAIL_TO,
+    ALERT_NOTIFY_RECOVERY,
+    ALERT_SMTP_FROM,
+    ALERT_SMTP_HOST,
+    ALERT_SMTP_PASSWORD,
+    ALERT_SMTP_PORT,
+    ALERT_SMTP_USE_TLS,
+    ALERT_SMTP_USER,
+    ALERT_THRESHOLDS,
+    ALERT_WEBHOOK_TIMEOUT_SECONDS,
+    ALERT_WEBHOOK_URL,
+)
+from ..database import DatabaseBackend, PRODUCTS
+from ..observability import logger, metrics
+
+
+FRESHNESS_WINDOWS = {
+    "quotidienne": timedelta(days=2),
+    "daily": timedelta(days=2),
+    "hebdomadaire": timedelta(days=8),
+    "weekly": timedelta(days=8),
+    "mensuelle": timedelta(days=62),
+    "monthly": timedelta(days=62),
+}
+
+
+@dataclass(frozen=True)
+class AlertEvent:
+    key: str
+    kind: str
+    status: str
+    title: str
+    message: str
+    occurred_at: str
+    product: str | None = None
+    source_code: str | None = None
+    value: float | None = None
+    threshold: float | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class Notifier(Protocol):
+    def send(self, events: list[AlertEvent]) -> bool: ...
+
+
+class NotificationDispatcher:
+    """Deliver one aggregated batch to every configured channel.
+
+    Webhooks use a small Teams-compatible payload with a ``text`` field, while
+    retaining the full event list for generic webhook consumers.
+    """
+
+    def __init__(
+        self,
+        webhook_url: str = ALERT_WEBHOOK_URL,
+        email_to: tuple[str, ...] = ALERT_EMAIL_TO,
+        smtp_host: str = ALERT_SMTP_HOST,
+        smtp_port: int = ALERT_SMTP_PORT,
+        smtp_user: str = ALERT_SMTP_USER,
+        smtp_password: str = ALERT_SMTP_PASSWORD,
+        smtp_from: str = ALERT_SMTP_FROM,
+        smtp_use_tls: bool = ALERT_SMTP_USE_TLS,
+    ) -> None:
+        self.webhook_url = webhook_url
+        self.email_to = email_to
+        self.smtp_host = smtp_host
+        self.smtp_port = smtp_port
+        self.smtp_user = smtp_user
+        self.smtp_password = smtp_password
+        self.smtp_from = smtp_from or smtp_user
+        self.smtp_use_tls = smtp_use_tls
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.webhook_url or (self.email_to and self.smtp_host))
+
+    def send(self, events: list[AlertEvent]) -> bool:
+        if not events or not self.enabled:
+            return False
+
+        delivered = False
+        text = "\n".join(f"• {event.title}: {event.message}" for event in events)
+        if self.webhook_url:
+            try:
+                payload = {
+                    "title": "Price Monitor - alerte prix",
+                    "text": text,
+                    "alerts": [event.as_dict() for event in events],
+                }
+                request = Request(
+                    self.webhook_url,
+                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "User-Agent": "PriceMonitor/1.0"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=ALERT_WEBHOOK_TIMEOUT_SECONDS) as response:
+                    if not 200 <= int(response.status) < 300:
+                        raise RuntimeError(f"webhook HTTP {response.status}")
+                delivered = True
+                metrics.increment("price_monitor_alert_notifications_total", labels={"channel": "webhook", "status": "success"})
+            except Exception as exc:
+                metrics.increment("price_monitor_alert_notifications_total", labels={"channel": "webhook", "status": "error"})
+                logger.error("Alert webhook delivery failed", extra={"event": "alert_notification_failed", "channel": "webhook", "error": str(exc)})
+
+        if self.email_to and self.smtp_host:
+            try:
+                message = EmailMessage()
+                message["Subject"] = f"Price Monitor - {len(events)} alerte(s)"
+                message["From"] = self.smtp_from
+                message["To"] = ", ".join(self.email_to)
+                message.set_content(text)
+                with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=ALERT_WEBHOOK_TIMEOUT_SECONDS) as server:
+                    if self.smtp_use_tls:
+                        server.starttls(context=ssl.create_default_context())
+                    if self.smtp_user:
+                        server.login(self.smtp_user, self.smtp_password)
+                    server.send_message(message)
+                delivered = True
+                metrics.increment("price_monitor_alert_notifications_total", labels={"channel": "email", "status": "success"})
+            except Exception as exc:
+                metrics.increment("price_monitor_alert_notifications_total", labels={"channel": "email", "status": "error"})
+                logger.error("Alert email delivery failed", extra={"event": "alert_notification_failed", "channel": "email", "error": str(exc)})
+
+        return delivered
+
+
+class AlertManager:
+    """Evaluate alert conditions and persist their active/recovered state."""
+
+    def __init__(
+        self,
+        database: DatabaseBackend,
+        notifier: Notifier | None = None,
+        thresholds: dict[str, dict[str, float]] | None = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
+        self.database = database
+        self.notifier = notifier or NotificationDispatcher()
+        self.thresholds = thresholds if thresholds is not None else ALERT_THRESHOLDS
+        self.now = now or (lambda: datetime.now(timezone.utc))
+
+    def evaluate_collection(
+        self,
+        observations: list[dict[str, Any]],
+        source_health: list[dict[str, Any]],
+    ) -> list[AlertEvent]:
+        events = self.evaluate_prices(observations, dispatch=False)
+        events.extend(self.evaluate_sources(source_health, dispatch=False))
+        self._dispatch(events)
+        return events
+
+    def evaluate_prices(
+        self,
+        observations: list[dict[str, Any]],
+        dispatch: bool = True,
+    ) -> list[AlertEvent]:
+        events: list[AlertEvent] = []
+        now = self.now().astimezone(timezone.utc)
+        occurred_at = now.replace(microsecond=0).isoformat()
+        for observation in observations:
+            product = str(observation.get("product", ""))
+            if product not in PRODUCTS:
+                continue
+            try:
+                price = float(observation["price"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not isfinite(price):
+                continue
+            for direction, threshold in self._rules_for(product).items():
+                active = price >= threshold if direction == "above" else price <= threshold
+                key = f"price:{product}:{direction}:{threshold:g}"
+                event = self._transition(
+                    key=key,
+                    active=active,
+                    value=price,
+                    occurred_at=occurred_at,
+                    event_factory=lambda status, direction=direction, threshold=threshold, product=product, price=price: AlertEvent(
+                        key=key,
+                        kind="price_threshold",
+                        status=status,
+                        title=f"{PRODUCTS[product]['label']} — seuil {direction}",
+                        message=(
+                            f"Le prix est de {price:g} {PRODUCTS[product]['unit']} "
+                            f"({'au-dessus' if direction == 'above' else 'en-dessous'} du seuil {threshold:g})."
+                            if status == "triggered"
+                            else f"Le prix est revenu à {price:g} {PRODUCTS[product]['unit']} ; le seuil {threshold:g} n'est plus atteint."
+                        ),
+                        occurred_at=occurred_at,
+                        product=product,
+                        value=price,
+                        threshold=threshold,
+                    ),
+                )
+                if event:
+                    events.append(event)
+        if dispatch:
+            self._dispatch(events)
+        return events
+
+    def evaluate_sources(
+        self,
+        sources: list[dict[str, Any]],
+        dispatch: bool = True,
+    ) -> list[AlertEvent]:
+        events: list[AlertEvent] = []
+        now = self.now().astimezone(timezone.utc)
+        occurred_at = now.replace(microsecond=0).isoformat()
+        for source in sources:
+            code = str(source.get("code", "")).strip()
+            if not code or not source.get("active", 1):
+                continue
+            label = str(source.get("label") or code)
+            last_error = str(source.get("last_error") or "").strip()
+            failed = bool(last_error)
+            failure_key = f"source:{code}:failed"
+            failure_event = self._transition(
+                key=failure_key,
+                active=failed,
+                value=None,
+                occurred_at=occurred_at,
+                event_factory=lambda status, code=code, label=label, last_error=last_error: AlertEvent(
+                    key=failure_key,
+                    kind="source_failure",
+                    status=status,
+                    title=f"Source indisponible — {label}",
+                    message=(
+                        f"La source {label} ({code}) a échoué : {last_error}."
+                        if status == "triggered"
+                        else f"La source {label} ({code}) fonctionne à nouveau."
+                    ),
+                    occurred_at=occurred_at,
+                    source_code=code,
+                ),
+            )
+            if failure_event:
+                events.append(failure_event)
+
+            # A failed source is already covered by the failure alert. Sources
+            # that are manually maintained or have never run are not stale.
+            if failed or not source.get("last_success_at"):
+                continue
+            frequency = str(source.get("frequency") or "").strip().lower()
+            freshness_window = FRESHNESS_WINDOWS.get(frequency)
+            if freshness_window is None:
+                continue
+            try:
+                last_success = self._parse_datetime(source["last_success_at"])
+            except (TypeError, ValueError):
+                continue
+            age = now - last_success
+            stale = age > freshness_window
+            stale_key = f"source:{code}:stale"
+            stale_event = self._transition(
+                key=stale_key,
+                active=stale,
+                value=age.total_seconds() / 3600,
+                occurred_at=occurred_at,
+                event_factory=lambda status, code=code, label=label, age=age, frequency=frequency: AlertEvent(
+                    key=stale_key,
+                    kind="source_stale",
+                    status=status,
+                    title=f"Source obsolète — {label}",
+                    message=(
+                        f"La dernière donnée de {label} date de {self._format_age(age)} "
+                        f"(fréquence attendue : {frequency})."
+                        if status == "triggered"
+                        else f"La source {label} fournit à nouveau des données fraîches."
+                    ),
+                    occurred_at=occurred_at,
+                    source_code=code,
+                    value=age.total_seconds() / 3600,
+                ),
+            )
+            if stale_event:
+                events.append(stale_event)
+        if dispatch:
+            self._dispatch(events)
+        return events
+
+    def _rules_for(self, product: str) -> dict[str, float]:
+        rules = self.thresholds.get(product, {})
+        normalized: dict[str, float] = {}
+        for direction in ("above", "below"):
+            if direction not in rules:
+                continue
+            try:
+                value = float(rules[direction])
+            except (TypeError, ValueError):
+                continue
+            if isfinite(value):
+                normalized[direction] = value
+        return normalized
+
+    def _transition(
+        self,
+        key: str,
+        active: bool,
+        value: float | None,
+        occurred_at: str,
+        event_factory: Callable[[str], AlertEvent],
+    ) -> AlertEvent | None:
+        previous = self.database.get_alert_state(key)
+        was_active = bool(previous and previous.get("active"))
+        self.database.set_alert_state(key, active, value, occurred_at)
+        if active == was_active:
+            return None
+        return event_factory("triggered" if active else "recovered")
+
+    def _dispatch(self, events: list[AlertEvent]) -> None:
+        dispatchable = [
+            event for event in events
+            if event.status == "triggered" or ALERT_NOTIFY_RECOVERY
+        ]
+        if not dispatchable:
+            return
+        try:
+            delivered = self.notifier.send(dispatchable)
+        except Exception as exc:
+            delivered = False
+            logger.exception("Alert notification failed", extra={"event": "alert_notification_failed", "error": str(exc)})
+        if delivered:
+            notified_at = self.now().astimezone(timezone.utc).replace(microsecond=0).isoformat()
+            for event in dispatchable:
+                state = self.database.get_alert_state(event.key)
+                self.database.set_alert_state(
+                    event.key,
+                    bool(state and state.get("active")),
+                    event.value,
+                    notified_at,
+                    last_notified_at=notified_at,
+                )
+            metrics.increment("price_monitor_alert_events_total", labels={"status": "notified"})
+        else:
+            metrics.increment("price_monitor_alert_events_total", labels={"status": "pending"})
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _format_age(age: timedelta) -> str:
+        hours = max(0, int(age.total_seconds() // 3600))
+        if hours < 48:
+            return f"{hours} heure(s)"
+        return f"{hours // 24} jour(s)"

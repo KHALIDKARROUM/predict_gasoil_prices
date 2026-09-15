@@ -1,7 +1,7 @@
 const PRODUCT_META = {
-  gasoil: { label: 'Gasoil / diesel', short: 'Gasoil', color: '#5eead4' },
-  brent: { label: 'Pétrole Brent', short: 'Brent', color: '#f9b35c' },
-  bitume: { label: 'Bitume', short: 'Bitume', color: '#a78bfa' }
+  gasoil: { label: 'Gasoil / diesel', short: 'Gasoil', color: '#5eead4', purchaseUnit: 'gallon' },
+  brent: { label: 'Pétrole Brent', short: 'Brent', color: '#f9b35c', purchaseUnit: 'baril' },
+  bitume: { label: 'Bitume', short: 'Bitume', color: '#a78bfa', purchaseUnit: 'tonne' }
 };
 let chart;
 let chartMode = 'indexed';
@@ -10,6 +10,7 @@ const formatPrice = (value, unit) => value == null ? '—' : `${Number(value).to
 const formatPct = (value) => value == null ? '—' : `${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(2).replace('.', ',')} %`;
 const formatDate = (value, withTime = false) => value ? new Date(value).toLocaleString('fr-FR', withTime ? { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' } : { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 const formatNumber = (value, digits = 2) => Number(value).toLocaleString('fr-FR', { maximumFractionDigits: digits });
+const formatMoney = (value, currency = 'USD') => value == null ? '—' : `${formatNumber(value)} ${currency}`;
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 const API_KEY_STORAGE = 'priceMonitorApiKey';
 
@@ -81,6 +82,124 @@ function renderLatest(rows) {
   }).join('') : '<tr><td colspan="7" class="empty">Aucun relevé sur la période.</td></tr>';
 }
 
+function renderProcurementSummary(purchase) {
+  const summary = $('#procurement-summary');
+  const budgetClass = purchase.budget_variance == null ? '' : purchase.budget_variance > 0 ? 'up' : 'down';
+  const impactClass = purchase.price_impact_unit_usd == null ? '' : purchase.price_impact_unit_usd > 0 ? 'up' : 'down';
+  summary.innerHTML = `<div class="purchase-stat"><span>Coût total</span><strong>${formatMoney(purchase.total_cost, purchase.currency)}</strong><small>${formatMoney(purchase.total_cost_usd, 'USD')}</small></div><div class="purchase-stat"><span>Écart au budget</span><strong class="${budgetClass}">${formatMoney(purchase.budget_variance, purchase.currency)}</strong><small>${purchase.budget_variance_usd == null ? 'Budget non renseigné' : formatMoney(purchase.budget_variance_usd, 'USD')}</small></div><div class="purchase-stat"><span>Prix marché de référence</span><strong>${formatMoney(purchase.market_price_usd, 'USD')}</strong><small>Dernier relevé ${PRODUCT_META[purchase.product]?.purchaseUnit || ''}</small></div><div class="purchase-stat"><span>Impact du prix</span><strong class="${impactClass}">${formatMoney(purchase.price_impact_unit_usd, 'USD')} / ${PRODUCT_META[purchase.product]?.purchaseUnit || 'unité'}</strong><small>${purchase.price_impact_pct == null ? 'Référence indisponible' : `${formatPct(purchase.price_impact_pct)} · ${formatMoney(purchase.price_impact_total_usd, 'USD')} au total`}</small></div>`;
+  summary.hidden = false;
+}
+
+function renderProcurements(rows) {
+  $('#procurement-table').innerHTML = rows.length ? rows.map(row => {
+    const meta = PRODUCT_META[row.product] || { label: row.product, color: '#a7bac2', purchaseUnit: row.unit };
+    const varianceClass = row.budget_variance == null ? '' : row.budget_variance > 0 ? 'negative' : 'positive';
+    const impactClass = row.price_impact_pct == null ? '' : row.price_impact_pct > 0 ? 'negative' : 'positive';
+    const budgetPct = row.budget_amount > 0 ? ` (${formatPct(row.budget_variance / row.budget_amount * 100)})` : '';
+    return `<tr><td>${formatDate(row.purchase_date)}</td><td><div class="product-cell"><i style="background:${meta.color}"></i><strong>${meta.label}</strong></div></td><td>${escapeHtml(row.supplier)}</td><td>${formatNumber(row.quantity, 2)} ${meta.purchaseUnit}</td><td class="price-cell">${formatMoney(row.total_cost, row.currency)}<br><span class="source-cell">${formatMoney(row.total_cost_usd, 'USD')}</span></td><td class="${varianceClass}">${row.budget_variance == null ? '—' : `${formatMoney(row.budget_variance, row.currency)}${budgetPct}`}</td><td class="${impactClass}">${row.price_impact_pct == null ? '—' : `${formatPct(row.price_impact_pct)}<br><span class="source-cell">${formatMoney(row.price_impact_total_usd, 'USD')}</span>`}</td></tr>`;
+  }).join('') : '<tr><td colspan="7" class="empty">Aucun achat enregistré.</td></tr>';
+}
+
+async function loadProcurements() {
+  try {
+    const response = await protectedFetch('/api/procurements?limit=20');
+    if (!response.ok) throw new Error('Impossible de charger les achats.');
+    const data = await response.json();
+    renderProcurements(data.purchases || []);
+  } catch (error) {
+    $('#procurement-table').innerHTML = '<tr><td colspan="7" class="empty error-note">Historique des achats indisponible.</td></tr>';
+  }
+}
+
+function updateProcurementUnits() {
+  const product = $('#procurement-product').value;
+  const currency = $('#procurement-currency').value;
+  const meta = PRODUCT_META[product];
+  $('#quantity-unit').textContent = meta.purchaseUnit;
+  $('#unit-price-unit').textContent = `${currency}/${meta.purchaseUnit}`;
+}
+
+let historyPage = 1;
+let historyPages = 0;
+
+function historyFilterParams(includeDates = true) {
+  const values = Object.fromEntries(new FormData($('#history-filters')));
+  const params = new URLSearchParams();
+  ['product', 'supplier', 'source', 'min_price', 'max_price'].forEach(key => { if (values[key]) params.set(key, values[key]); });
+  if (includeDates) {
+    ['date_from', 'date_to'].forEach(key => { if (values[key]) params.set(key, values[key]); });
+  }
+  return params;
+}
+
+function updateHistoryExportLinks() {
+  const query = historyFilterParams().toString();
+  $('#history-csv').href = `/export.csv${query ? `?${query}` : ''}`;
+  $('#history-xlsx').href = `/export.xlsx${query ? `?${query}` : ''}`;
+}
+
+function renderHistory(data) {
+  const rows = data.items || [];
+  $('#history-count').textContent = `${data.total || 0} relevé(s)`;
+  historyPage = data.page || 1;
+  historyPages = data.pages || 0;
+  $('#history-page-label').textContent = historyPages ? `Page ${historyPage} / ${historyPages}` : 'Aucune page';
+  $('#history-prev').disabled = historyPage <= 1;
+  $('#history-next').disabled = !historyPages || historyPage >= historyPages;
+  $('#history-table').innerHTML = rows.length ? rows.map(row => {
+    const meta = PRODUCT_META[row.product] || { label: row.product, color: '#a7bac2' };
+    const pct = row.variation_pct; const cls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+    return `<tr><td>${formatDate(row.source_date)}</td><td><div class="product-cell"><i style="background:${meta.color}"></i><strong>${meta.label}</strong></div></td><td class="price-cell">${formatPrice(row.price, row.unit)}</td><td>${escapeHtml(row.supplier || '—')}</td><td class="source-cell">${escapeHtml(row.source)}</td><td>${formatDate(row.collected_at, true)}</td><td><span class="trend ${cls}">${formatPct(pct)}</span></td></tr>`;
+  }).join('') : '<tr><td colspan="7" class="empty">Aucun relevé pour ces critères.</td></tr>';
+  updateHistoryExportLinks();
+}
+
+async function loadHistory(page = 1) {
+  const params = historyFilterParams();
+  params.set('page', page);
+  params.set('page_size', '50');
+  try {
+    const response = await protectedFetch(`/api/history?${params.toString()}`);
+    if (!response.ok) throw new Error('Impossible de charger l’historique.');
+    renderHistory(await response.json());
+  } catch (error) {
+    $('#history-table').innerHTML = '<tr><td colspan="7" class="empty error-note">Historique momentanément indisponible.</td></tr>';
+    $('#history-count').textContent = 'Indisponible';
+  }
+}
+
+function setDefaultComparePeriods() {
+  const end = new Date();
+  const formatInputDate = value => value.toISOString().slice(0, 10);
+  const shift = days => { const value = new Date(end); value.setDate(value.getDate() + days); return value; };
+  const form = $('#compare-form');
+  form.period_a_from.value = formatInputDate(shift(-60));
+  form.period_a_to.value = formatInputDate(shift(-31));
+  form.period_b_from.value = formatInputDate(shift(-30));
+  form.period_b_to.value = formatInputDate(end);
+}
+
+function renderComparison(data) {
+  $('#compare-table').innerHTML = Object.entries(data.products || {}).map(([key, row]) => {
+    const meta = PRODUCT_META[key] || { label: key, color: '#a7bac2' };
+    const changeClass = row.average_change > 0 ? 'negative' : row.average_change < 0 ? 'positive' : '';
+    return `<tr><td><div class="product-cell"><i style="background:${meta.color}"></i><strong>${meta.label}</strong></div></td><td>${formatPrice(row.period_a.average, row.period_a.average == null ? '' : 'USD')}</td><td>${formatPrice(row.period_b.average, row.period_b.average == null ? '' : 'USD')}</td><td class="${changeClass}">${row.average_change == null ? '—' : `${formatNumber(row.average_change)} USD · ${formatPct(row.average_change_pct)}`}</td><td>${row.period_a.count} / ${row.period_b.count}</td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="empty">Aucune donnée à comparer.</td></tr>';
+}
+
+async function compareHistory() {
+  const values = Object.fromEntries(new FormData($('#compare-form')));
+  const params = new URLSearchParams(values);
+  historyFilterParams(false).forEach((value, key) => params.set(key, value));
+  try {
+    const response = await protectedFetch(`/api/history/compare?${params.toString()}`);
+    if (!response.ok) { const result = await response.json(); throw new Error(result.error || 'Impossible de comparer les périodes.'); }
+    renderComparison(await response.json());
+  } catch (error) {
+    $('#compare-table').innerHTML = `<tr><td colspan="5" class="empty error-note">${escapeHtml(error.message)}</td></tr>`;
+  }
+}
+
 async function loadDashboard() {
   const days = $('#period-select').value; $('#period-label').textContent = days == 365 ? '12 derniers mois' : days == 1825 ? '5 dernières années' : `${days} derniers jours`;
   try {
@@ -114,8 +233,39 @@ document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('cl
 }));
 
 $('#period-select').addEventListener('change', loadDashboard);
-$('#refresh-btn').addEventListener('click', () => { loadDashboard(); loadLogs(); showToast('Tableau de bord actualisé.'); });
+$('#refresh-btn').addEventListener('click', () => { loadDashboard(); loadLogs(); loadHistory(historyPage); loadProcurements(); showToast('Tableau de bord actualisé.'); });
 $('#collect-btn').addEventListener('click', async () => { const button = $('#collect-btn'); button.disabled = true; button.innerHTML = 'Collecte en cours…'; try { const response = await protectedFetch('/api/collect', { method: 'POST', headers: { 'Content-Type': 'application/json' } }); const result = await response.json(); if (!response.ok || result.status === 'error') throw new Error(result.message || result.error || 'La collecte a échoué.'); showToast(`${result.rows} relevé(s) enregistré(s).`); } catch (error) { showToast(error.message, true); } finally { button.disabled = false; button.innerHTML = '<span>↻</span> Lancer une collecte'; loadDashboard(); loadLogs(); } });
-$('#bitumen-form').addEventListener('submit', async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); data.product = 'bitume'; data.unit = 'USD/tonne'; try { const response = await protectedFetch('/api/observations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Échec de l’enregistrement.'); showToast('Relevé bitume enregistré avec succès.'); event.target.reset(); event.target.source_date.value = new Date().toISOString().slice(0, 10); loadDashboard(); } catch (error) { showToast(error.message, true); } });
+$('#bitumen-form').addEventListener('submit', async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); data.product = 'bitume'; data.unit = 'USD/tonne'; try { const response = await protectedFetch('/api/observations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Échec de l’enregistrement.'); showToast('Relevé bitume enregistré avec succès.'); event.target.reset(); event.target.source_date.value = new Date().toISOString().slice(0, 10); loadDashboard(); loadHistory(historyPage); } catch (error) { showToast(error.message, true); } });
+$('#procurement-product').addEventListener('change', updateProcurementUnits);
+$('#procurement-currency').addEventListener('change', () => {
+  const input = $('#exchange-rate');
+  if ($('#procurement-currency').value === 'USD') input.value = '1';
+  else if (input.value === '1') input.value = '';
+  updateProcurementUnits();
+});
+$('#procurement-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+  try {
+    const response = await protectedFetch('/api/procurements', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Impossible d’évaluer cet achat.');
+    renderProcurementSummary(result.purchase);
+    showToast('Impact d’achat calculé et enregistré.');
+    event.target.reset();
+    event.target.purchase_date.value = new Date().toISOString().slice(0, 10);
+    event.target.exchange_rate.value = '1';
+    updateProcurementUnits();
+    loadProcurements();
+  } catch (error) { showToast(error.message, true); }
+});
+$('#history-filters').addEventListener('submit', event => { event.preventDefault(); loadHistory(1); });
+$('#history-reset').addEventListener('click', () => { $('#history-filters').reset(); loadHistory(1); });
+$('#history-prev').addEventListener('click', () => { if (historyPage > 1) loadHistory(historyPage - 1); });
+$('#history-next').addEventListener('click', () => { if (historyPage < historyPages) loadHistory(historyPage + 1); });
+$('#compare-form').addEventListener('submit', event => { event.preventDefault(); compareHistory(); });
 $('#bitumen-form').source_date.value = new Date().toISOString().slice(0, 10);
-loadDashboard(); loadLogs();
+$('#procurement-form').purchase_date.value = new Date().toISOString().slice(0, 10);
+setDefaultComparePeriods();
+updateProcurementUnits();
+loadDashboard(); loadLogs(); loadHistory(); loadProcurements();

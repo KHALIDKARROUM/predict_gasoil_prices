@@ -138,3 +138,100 @@ def test_dashboard_excludes_observations_outside_requested_window(empty_database
 
     assert dashboard["metrics"]["gasoil"]["count"] == 1
     assert dashboard["metrics"]["gasoil"]["average"] == 20.0
+
+
+def test_create_procurement_calculates_total_budget_variance_and_price_impact(empty_database):
+    empty_database.insert_observation(
+        observation_payload("gasoil", 2.5, "2026-09-14", "2026-09-14T12:00:00+00:00")
+    )
+
+    purchase = empty_database.create_procurement(
+        {
+            "product": "gasoil",
+            "supplier": "Supplier ABC",
+            "quantity": 1000,
+            "unit": "gallon",
+            "currency": "EUR",
+            "unit_price": 2,
+            "exchange_rate": 1.1,
+            "transport_cost": 100,
+            "budget_amount": 5000,
+            "purchase_date": "2026-09-15",
+        }
+    )
+
+    assert purchase["total_cost"] == 2100.0
+    assert purchase["total_cost_usd"] == 2310.0
+    assert purchase["budget_variance"] == -2900.0
+    assert purchase["budget_variance_usd"] == -3190.0
+    assert purchase["market_price_usd"] == 2.5
+    assert purchase["price_impact_unit_usd"] == -0.3
+    assert purchase["price_impact_total_usd"] == -300.0
+    assert purchase["price_impact_pct"] == -12.0
+    assert empty_database.procurements(limit=10)[0]["supplier"] == "Supplier ABC"
+
+
+def test_create_procurement_rejects_invalid_currency_and_exchange_rate(empty_database):
+    payload = {
+        "product": "brent",
+        "supplier": "Supplier ABC",
+        "quantity": 100,
+        "unit": "baril",
+        "currency": "EURO",
+        "unit_price": 80,
+        "exchange_rate": 1.1,
+    }
+
+    with pytest.raises(ValueError, match="trois lettres"):
+        empty_database.create_procurement(payload)
+
+    payload["currency"] = "EUR"
+    payload["exchange_rate"] = 0
+    with pytest.raises(ValueError, match="taux de change"):
+        empty_database.create_procurement(payload)
+
+
+def test_history_supports_filters_and_pagination(empty_database):
+    rows = [
+        ("gasoil", 2.0, "2026-09-01", "Alpha", "EIA"),
+        ("gasoil", 3.0, "2026-09-02", "Beta", "Internal"),
+        ("gasoil", 4.0, "2026-09-03", "Alpha", "EIA"),
+    ]
+    for product, price, source_date, supplier, source in rows:
+        payload = observation_payload(product, price, source_date, f"{source_date}T12:00:00+00:00")
+        payload.update({"supplier": supplier, "source": source})
+        empty_database.insert_observation(payload)
+
+    result = empty_database.history(
+        product="gasoil",
+        supplier="Alpha",
+        source="EIA",
+        date_from="2026-09-01",
+        date_to="2026-09-03",
+        min_price=2,
+        max_price=4,
+        page=1,
+        page_size=1,
+    )
+
+    assert result["total"] == 2
+    assert result["pages"] == 2
+    assert result["items"][0]["price"] == 4.0
+    assert result["items"][0]["supplier"] == "Alpha"
+
+
+def test_compare_periods_returns_average_change(empty_database):
+    for price, source_date in ((10.0, "2026-09-01"), (12.0, "2026-09-10")):
+        empty_database.insert_observation(
+            observation_payload("brent", price, source_date, f"{source_date}T12:00:00+00:00")
+        )
+
+    comparison = empty_database.compare_periods(
+        "2026-09-01", "2026-09-05", "2026-09-06", "2026-09-15"
+    )
+
+    brent = comparison["products"]["brent"]
+    assert brent["period_a"]["average"] == 10.0
+    assert brent["period_b"]["average"] == 12.0
+    assert brent["average_change"] == 2.0
+    assert brent["average_change_pct"] == 20.0

@@ -1,5 +1,4 @@
--- Schéma de production MySQL 8 pour Price Monitor.
--- La base cible est sélectionnée par la configuration MYSQL_DATABASE.
+-- Packaged copy of the MySQL 8 schema used when Price Monitor is installed as a wheel.
 
 CREATE TABLE IF NOT EXISTS price_observations (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

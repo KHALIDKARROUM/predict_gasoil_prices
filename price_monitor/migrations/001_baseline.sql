@@ -1,0 +1,1 @@
+-- Existing SQLite databases are marked as having the baseline schema.
