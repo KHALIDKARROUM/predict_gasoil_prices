@@ -15,6 +15,7 @@ SOURCE_CODE_BY_LABEL = {
     "EIA/FRED - DDFUELNYH": "fred_diesel",
     "EIA/FRED - DCOILBRENTEU": "fred_brent",
     "Alpha Vantage - BRENT": "alpha_brent",
+    "U.S. BLS Public Data API - WPU058": "bls_asphalt_ppi",
 }
 
 
@@ -129,22 +130,31 @@ def run_collection(database: DatabaseBackend) -> dict:
         batch = collect_all()
         observations, messages = batch
         source_health = getattr(batch, "source_health", None)
+        benchmarks = list(getattr(batch, "benchmarks", []))
         has_source_metadata = source_health is not None
         source_outcomes = list(source_health or []) or _observation_source_health(observations)
         for observation in observations:
             database.insert_observation(observation)
+        benchmark_inserter = getattr(database, "insert_benchmark", None)
+        if callable(benchmark_inserter):
+            for benchmark in benchmarks:
+                benchmark_inserter(benchmark)
         finished = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         _update_source_health(database, source_outcomes, finished)
         message = " ".join(messages) or "Collecte terminée avec succès."
         status = _collection_status(observations, messages, source_outcomes, has_source_metadata)
-        database.log_collection(status, len(observations), message, started, finished)
+        row_count = len(observations) + len(benchmarks)
+        database.log_collection(status, row_count, message, started, finished)
         _evaluate_collection_alerts(database, observations)
         metrics.increment("price_monitor_collection_total", labels={"status": status})
         logger.info(
             "Collection completed",
-            extra={"event": "collection_completed", "status": status, "rows": len(observations)},
+            extra={"event": "collection_completed", "status": status, "rows": row_count},
         )
-        return {"status": status, "rows": len(observations), "message": message}
+        result = {"status": status, "rows": row_count, "message": message}
+        if benchmarks:
+            result["benchmarks"] = len(benchmarks)
+        return result
     except Exception as exc:
         finished = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         if not source_outcomes:

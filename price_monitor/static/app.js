@@ -247,6 +247,58 @@ async function loadProcurements() {
   }
 }
 
+const REGION_LABELS = {
+  global: 'International', europe: 'Europe', africa_middle_east: 'Afrique & Moyen-Orient',
+  asia_pacific: 'Asie-Pacifique', americas: 'Amériques', local: 'Local'
+};
+
+function renderMarketContext(data) {
+  const context = data.market_context || {};
+  const price = context.latest_price;
+  const priceLabel = data.product === 'bitume' ? 'Dernier devis enregistré' : 'Dernier benchmark gasoil';
+  const priceDetail = price
+    ? `<strong>${formatNumber(price.price, price.price < 10 ? 3 : 2)} ${escapeHtml(price.unit)}</strong><small>${formatDate(price.source_date)} · ${escapeHtml(price.source)}</small>`
+    : '<strong>—</strong><small>Aucun relevé disponible.</small>';
+  const benchmarkCards = (context.benchmarks || []).map(row =>
+    `<div class="market-card"><span>${escapeHtml(row.label)}</span><strong>${formatNumber(row.value, 3)} ${escapeHtml(row.unit)}</strong><small>${formatDate(row.source_date)} · ${escapeHtml(row.geography)} · ${formatPct(row.variation_pct)}</small></div>`
+  ).join('');
+  $('#market-context').innerHTML = `<div class="market-card"><span>${priceLabel}</span>${priceDetail}</div>${benchmarkCards}<div class="market-card market-warning"><strong>À lire avant de négocier</strong>${escapeHtml(context.warning || '')}</div>`;
+}
+
+function renderSupplierDirectory(rows) {
+  $('#supplier-directory').innerHTML = rows.length ? rows.map(row => {
+    const links = [
+      row.website_url ? `<a class="text-btn" href="${escapeHtml(row.website_url)}" target="_blank" rel="noopener noreferrer">Site officiel ↗</a>` : '',
+      row.contact_url && row.contact_url !== row.website_url ? `<a class="text-btn" href="${escapeHtml(row.contact_url)}" target="_blank" rel="noopener noreferrer">Contact / commande ↗</a>` : ''
+    ].filter(Boolean).join('');
+    return `<article class="supplier-card"><div class="supplier-card-head"><h4>${escapeHtml(row.name)}</h4><span class="supplier-region">${escapeHtml(REGION_LABELS[row.region] || row.region)}</span></div><p>${escapeHtml(row.coverage)}</p><dl><dt>Accès</dt><dd>${escapeHtml(row.channel)}</dd><dt>Livraison</dt><dd>${escapeHtml(row.typical_terms)}</dd><dt>Spécification</dt><dd>${escapeHtml(row.specifications)}</dd></dl><small class="field-help">${escapeHtml(row.buyer_note)}</small><div class="supplier-links">${links}</div></article>`;
+  }).join('') : '<div class="empty">Aucun canal fournisseur enregistré pour ces critères.</div>';
+}
+
+function renderProcurementGuide(data) {
+  renderMarketContext(data);
+  renderSupplierDirectory(data.suppliers || []);
+  $('#buy-steps').innerHTML = (data.steps || []).map(step => `<li><span class="step-number">${step.number}</span><b>${escapeHtml(step.title)}</b><span>${escapeHtml(step.detail)}</span></li>`).join('');
+  $('#buy-specification').innerHTML = `<strong>Spécification :</strong> ${escapeHtml(data.specification)}`;
+  $('#buy-logistics').innerHTML = `<strong>Logistique :</strong> ${escapeHtml(data.logistics)}`;
+  $('#rfq-checklist').innerHTML = (data.rfq_fields || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+  $('#landed-cost-formula').innerHTML = `<strong>Formule de comparaison :</strong> ${escapeHtml(data.landed_cost_formula)}`;
+  $('#buy-disclaimer').textContent = data.disclaimer || '';
+}
+
+async function loadProcurementGuide() {
+  const product = $('#buy-product').value;
+  const region = $('#buy-region').value;
+  try {
+    const response = await fetch(`/api/procurement-guide?product=${encodeURIComponent(product)}&region=${encodeURIComponent(region)}`);
+    if (!response.ok) { const body = await response.json(); throw new Error(body.error || 'Guide d’achat indisponible.'); }
+    renderProcurementGuide(await response.json());
+  } catch (error) {
+    $('#market-context').innerHTML = `<div class="empty error-note">${escapeHtml(error.message)}</div>`;
+    $('#supplier-directory').innerHTML = '<div class="empty error-note">Canaux fournisseurs indisponibles.</div>';
+  }
+}
+
 function updateProcurementUnits() {
   const product = $('#procurement-product').value;
   const currency = $('#procurement-currency').value;
@@ -370,10 +422,12 @@ document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('cl
 
 $('#period-select').addEventListener('change', loadDashboard);
 $('#forecast-horizon').addEventListener('change', renderForecast);
-$('#refresh-btn').addEventListener('click', () => { loadDashboard(); loadForecast(); loadAlerts(); loadLogs(); loadHistory(historyPage); loadProcurements(); showToast('Tableau de bord actualisé.'); });
+$('#refresh-btn').addEventListener('click', () => { loadDashboard(); loadForecast(); loadAlerts(); loadLogs(); loadHistory(historyPage); loadProcurements(); loadProcurementGuide(); showToast('Tableau de bord actualisé.'); });
 $('#collect-btn').addEventListener('click', async () => { const button = $('#collect-btn'); button.disabled = true; button.innerHTML = 'Collecte en cours…'; try { const response = await protectedFetch('/api/collect', { method: 'POST', headers: { 'Content-Type': 'application/json' } }); const result = await response.json(); if (!response.ok || result.status === 'error') throw new Error(result.message || result.error || 'La collecte a échoué.'); showToast(`${result.rows} relevé(s) enregistré(s).`); } catch (error) { showToast(error.message, true); } finally { button.disabled = false; button.innerHTML = '<span>↻</span> Lancer une collecte'; loadDashboard(); loadLogs(); } });
 $('#bitumen-form').addEventListener('submit', async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); data.product = 'bitume'; data.unit = 'USD/tonne'; try { const response = await protectedFetch('/api/observations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Échec de l’enregistrement.'); showToast('Relevé bitume enregistré avec succès.'); event.target.reset(); event.target.source_date.value = new Date().toISOString().slice(0, 10); loadDashboard(); loadHistory(historyPage); } catch (error) { showToast(error.message, true); } });
 $('#procurement-product').addEventListener('change', updateProcurementUnits);
+$('#buy-product').addEventListener('change', loadProcurementGuide);
+$('#buy-region').addEventListener('change', loadProcurementGuide);
 $('#procurement-currency').addEventListener('change', () => {
   const input = $('#exchange-rate');
   if ($('#procurement-currency').value === 'USD') input.value = '1';
@@ -447,4 +501,4 @@ $('#bitumen-form').source_date.value = new Date().toISOString().slice(0, 10);
 $('#procurement-form').purchase_date.value = new Date().toISOString().slice(0, 10);
 setDefaultComparePeriods();
 updateProcurementUnits();
-loadDashboard(); loadForecast(); loadAlerts(); loadLogs(); loadHistory(); loadProcurements();
+loadDashboard(); loadForecast(); loadAlerts(); loadLogs(); loadHistory(); loadProcurements(); loadProcurementGuide();

@@ -24,6 +24,7 @@
         <a class="nav-item" href="#alerts"><span>!</span> Alertes</a>
         <a class="nav-item" href="#history-page"><span>◷</span> Historique</a>
         <a class="nav-item" href="#manual"><span>＋</span> Saisie bitume</a>
+        <a class="nav-item" href="#buying-guide"><span>⌖</span> Où & comment acheter</a>
         <a class="nav-item" href="#procurement"><span>▣</span> Achats</a>
         <a class="nav-item" href="#sources"><span>◎</span> Sources & qualité</a>
       </nav>
@@ -117,6 +118,33 @@
         <div class="panel-heading"><div><p class="eyebrow">COMPARAISON DE PÉRIODES</p><h2>Mesurer l'évolution</h2></div></div>
         <form id="compare-form" class="compare-form"><div><span>Période A</span><label>Du<input type="date" name="period_a_from" required></label><label>Au<input type="date" name="period_a_to" required></label></div><div><span>Période B</span><label>Du<input type="date" name="period_b_from" required></label><label>Au<input type="date" name="period_b_to" required></label></div><button class="primary-btn" type="submit">Comparer les périodes</button></form>
         <div class="table-scroll"><table><thead><tr><th>Produit</th><th>Période A · moyenne</th><th>Période B · moyenne</th><th>Variation moyenne</th><th>Relevés A / B</th></tr></thead><tbody id="compare-table"><tr><td colspan="5" class="empty">Choisissez deux périodes à comparer.</td></tr></tbody></table></div>
+      </section>
+
+      <section class="panel buying-panel" id="buying-guide">
+        <div class="panel-heading buying-heading">
+          <div><p class="eyebrow">SOURCING & ACHAT</p><h2>Où acheter et comment acheter</h2></div>
+          <div class="buying-filters">
+            <label>Produit<select id="buy-product"><option value="gasoil">Gasoil / diesel</option><option value="bitume">Bitume</option></select></label>
+            <label>Région<select id="buy-region"><option value="all">Toutes</option><option value="europe">Europe</option><option value="africa_middle_east">Afrique & Moyen-Orient</option><option value="asia_pacific">Asie-Pacifique</option><option value="americas">Amériques</option><option value="local">Local</option></select></label>
+          </div>
+        </div>
+        <div id="market-context" class="market-context"><div class="empty">Chargement du contexte marché…</div></div>
+        <div class="buying-layout">
+          <div>
+            <h3 class="section-title">Canaux fournisseurs officiels</h3>
+            <div id="supplier-directory" class="supplier-directory"><div class="empty">Chargement des fournisseurs…</div></div>
+          </div>
+          <div>
+            <h3 class="section-title">Processus d'achat recommandé</h3>
+            <ol id="buy-steps" class="buy-steps"><li>Chargement…</li></ol>
+          </div>
+        </div>
+        <div class="rfq-panel">
+          <div><h3 class="section-title">Informations à mettre dans le RFQ</h3><p id="buy-specification" class="panel-intro"></p><p id="buy-logistics" class="panel-intro"></p></div>
+          <ul id="rfq-checklist" class="rfq-checklist"></ul>
+        </div>
+        <p id="landed-cost-formula" class="cost-formula"></p>
+        <p id="buy-disclaimer" class="buy-disclaimer"></p>
       </section>
 
       <section class="panel procurement-panel" id="procurement">

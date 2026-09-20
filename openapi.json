@@ -5,95 +5,866 @@
     "version": "0.1.0",
     "description": "API de suivi des prix du gasoil, du Brent et du bitume."
   },
-  "servers": [{"url": "/", "description": "Serveur courant"}],
-  "paths": {
-    "/health": {"get": {"summary": "Readiness probe", "responses": {"200": {"description": "Service prêt"}, "503": {"description": "Dépendance indisponible"}}}},
-    "/health/live": {"get": {"summary": "Liveness probe", "responses": {"200": {"description": "Processus actif"}}}},
-    "/health/ready": {"get": {"summary": "Readiness probe", "responses": {"200": {"description": "Dépendances disponibles"}, "503": {"description": "Dépendance indisponible"}}}},
-    "/metrics": {"get": {"summary": "Métriques Prometheus", "responses": {"200": {"description": "Métriques au format texte"}}}},
-    "/openapi.json": {"get": {"summary": "OpenAPI specification", "responses": {"200": {"description": "Specification OpenAPI 3.0"}}}},
-    "/api/dashboard": {"get": {"summary": "Indicateurs, séries et qualité", "parameters": [{"$ref": "#/components/parameters/Days"}], "responses": {"200": {"description": "Tableau de bord"}}}},
-    "/api/forecast": {"get": {"summary": "Prévisions gasoil et Brent", "parameters": [{"$ref": "#/components/parameters/HistoryDays"}], "responses": {"200": {"description": "Prévisions à 7, 30 et 90 jours avec intervalles de confiance et métriques de backtest"}, "400": {"description": "Paramètre invalide"}}}},
-    "/api/alerts": {
-      "get": {"summary": "Lister les règles et leur état", "responses": {"200": {"description": "Règles actives, rétablies ou en pause"}}},
-      "post": {"summary": "Créer une règle d'alerte", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AlertRuleInput"}}}}, "responses": {"201": {"description": "Règle créée"}, "400": {"description": "Règle invalide"}}}
+  "servers": [
+    {
+      "url": "/",
+      "description": "Serveur courant"
+    }
+  ],
+  "tags": [
+    {
+      "name": "health",
+      "description": "Sondes de vie et de disponibilit\u00e9"
     },
-    "/api/alerts/{id}": {
-      "put": {"summary": "Modifier une règle d'alerte", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "integer"}}], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/AlertRuleInput"}}}}, "responses": {"200": {"description": "Règle modifiée"}, "400": {"description": "Règle invalide"}}},
-      "delete": {"summary": "Supprimer une règle d'alerte", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "integer"}}], "responses": {"200": {"description": "Règle supprimée"}, "400": {"description": "Règle introuvable"}}}
-    },
-    "/api/observations": {
-      "get": {"summary": "Historique filtré", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [{"$ref": "#/components/parameters/Product"}, {"$ref": "#/components/parameters/Days"}], "responses": {"200": {"description": "Observations"}, "401": {"description": "Authentification requise"}}},
-      "post": {"summary": "Ajouter une observation", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ObservationInput"}}}}, "responses": {"201": {"description": "Observation créée"}, "400": {"description": "Entrée invalide"}}}
-    },
-    "/api/history": {
-      "get": {"summary": "Historique paginé avec filtres", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [{"$ref": "#/components/parameters/Product"}, {"$ref": "#/components/parameters/Page"}, {"$ref": "#/components/parameters/PageSize"}, {"name": "supplier", "in": "query", "schema": {"type": "string"}}, {"name": "source", "in": "query", "schema": {"type": "string"}}, {"name": "date_from", "in": "query", "schema": {"type": "string", "format": "date"}}, {"name": "date_to", "in": "query", "schema": {"type": "string", "format": "date"}}, {"name": "min_price", "in": "query", "schema": {"type": "number", "minimum": 0}}, {"name": "max_price", "in": "query", "schema": {"type": "number", "minimum": 0}}], "responses": {"200": {"description": "Historique filtré et paginé"}, "401": {"description": "Authentification requise"}}}
-    },
-    "/api/history/compare": {
-      "get": {"summary": "Comparer deux périodes", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "responses": {"200": {"description": "Comparaison par produit"}, "400": {"description": "Périodes invalides"}, "401": {"description": "Authentification requise"}}}
-    },
-    "/api/collect": {"post": {"summary": "Déclencher une collecte immédiate", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "responses": {"200": {"description": "Résultat de collecte"}, "401": {"description": "Authentification requise"}}}},
-    "/api/logs": {"get": {"summary": "Derniers journaux de collecte", "responses": {"200": {"description": "Journaux"}}}},
-    "/api/procurements": {
-      "get": {"summary": "Historique des achats", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "responses": {"200": {"description": "Achats et impacts calculés"}, "401": {"description": "Authentification requise"}}},
-      "post": {"summary": "Évaluer et enregistrer un achat", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProcurementInput"}}}}, "responses": {"201": {"description": "Achat enregistré"}, "400": {"description": "Entrée invalide"}}}
-    },
-    "/export.csv": {"get": {"summary": "Exporter en CSV", "responses": {"200": {"description": "Fichier CSV"}}}},
-    "/export.xlsx": {"get": {"summary": "Exporter en Excel", "responses": {"200": {"description": "Fichier XLSX"}}}}
-  },
+    {
+      "name": "market",
+      "description": "Donn\u00e9es et collectes de prix"
+    }
+  ],
   "components": {
     "securitySchemes": {
-      "ApiKeyHeader": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
-      "BearerAuth": {"type": "http", "scheme": "bearer"}
-    },
-    "parameters": {
-      "Days": {"name": "days", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1825, "default": 30}},
-      "HistoryDays": {"name": "history_days", "in": "query", "schema": {"type": "integer", "minimum": 90, "maximum": 1825, "default": 1825}},
-      "Product": {"name": "product", "in": "query", "schema": {"type": "string", "enum": ["gasoil", "brent", "bitume"]}}
-      ,"Page": {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1, "default": 1}},
-      "PageSize": {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}}
+      "ApiKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      },
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
     },
     "schemas": {
       "ObservationInput": {
         "type": "object",
-        "required": ["product", "price", "source"],
+        "required": [
+          "product",
+          "price",
+          "source"
+        ],
         "properties": {
-          "product": {"type": "string", "enum": ["gasoil", "brent", "bitume"]},
-          "price": {"type": "number", "exclusiveMinimum": 0},
-          "unit": {"type": "string"},
-          "source": {"type": "string", "maxLength": 150},
-          "supplier": {"type": "string", "maxLength": 150},
-          "source_date": {"type": "string", "format": "date"},
-          "collected_at": {"type": "string", "format": "date-time"},
-          "notes": {"type": "string", "maxLength": 500}
+          "product": {
+            "type": "string",
+            "enum": [
+              "gasoil",
+              "brent",
+              "bitume"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "unit": {
+            "type": "string",
+            "example": "USD/baril"
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 150
+          },
+          "supplier": {
+            "type": "string",
+            "maxLength": 150
+          },
+          "source_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "collected_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 500
+          }
         }
       },
       "ProcurementInput": {
         "type": "object",
-        "required": ["product", "supplier", "quantity", "unit_price", "currency", "exchange_rate"],
+        "required": [
+          "product",
+          "supplier",
+          "quantity",
+          "unit_price",
+          "currency",
+          "exchange_rate"
+        ],
         "properties": {
-          "product": {"type": "string", "enum": ["gasoil", "brent", "bitume"]},
-          "supplier": {"type": "string", "maxLength": 150},
-          "quantity": {"type": "number", "exclusiveMinimum": 0},
-          "unit": {"type": "string", "example": "tonne"},
-          "currency": {"type": "string", "pattern": "^[A-Z]{3}$", "example": "EUR"},
-          "unit_price": {"type": "number", "exclusiveMinimum": 0},
-          "exchange_rate": {"type": "number", "exclusiveMinimum": 0, "description": "USD pour 1 unité de la devise"},
-          "transport_cost": {"type": "number", "minimum": 0},
-          "budget_amount": {"type": "number", "minimum": 0},
-          "purchase_date": {"type": "string", "format": "date"},
-          "notes": {"type": "string", "maxLength": 500}
+          "product": {
+            "type": "string",
+            "enum": [
+              "gasoil",
+              "brent",
+              "bitume"
+            ]
+          },
+          "supplier": {
+            "type": "string",
+            "maxLength": 150
+          },
+          "quantity": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "unit": {
+            "type": "string",
+            "example": "tonne"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$",
+            "example": "EUR"
+          },
+          "unit_price": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "exchange_rate": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "USD pour 1 unit\u00e9 de la devise"
+          },
+          "transport_cost": {
+            "type": "number",
+            "minimum": 0
+          },
+          "budget_amount": {
+            "type": "number",
+            "minimum": 0
+          },
+          "purchase_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 500
+          }
         }
       },
       "AlertRuleInput": {
         "type": "object",
-        "required": ["product", "direction", "threshold", "channel"],
+        "required": [
+          "product",
+          "direction",
+          "threshold",
+          "channel"
+        ],
         "properties": {
-          "product": {"type": "string", "enum": ["gasoil", "brent", "bitume"]},
-          "direction": {"type": "string", "enum": ["above", "below"]},
-          "threshold": {"type": "number", "exclusiveMinimum": 0},
-          "channel": {"type": "string", "enum": ["webhook", "email", "both"]},
-          "muted": {"type": "boolean", "default": false}
+          "product": {
+            "type": "string",
+            "enum": [
+              "gasoil",
+              "brent",
+              "bitume"
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "above",
+              "below"
+            ]
+          },
+          "threshold": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "webhook",
+              "email",
+              "both"
+            ]
+          },
+          "muted": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "parameters": {
+      "Days": {
+        "name": "days",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1825,
+          "default": 30
+        }
+      },
+      "HistoryDays": {
+        "name": "history_days",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 90,
+          "maximum": 1825,
+          "default": 1825
+        }
+      },
+      "Product": {
+        "name": "product",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "gasoil",
+            "brent",
+            "bitume"
+          ]
+        }
+      },
+      "Page": {
+        "name": "page",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "PageSize": {
+        "name": "page_size",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness probe",
+        "responses": {
+          "200": {
+            "description": "Service pr\u00eat"
+          },
+          "503": {
+            "description": "D\u00e9pendance indisponible"
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "Processus actif"
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness probe",
+        "responses": {
+          "200": {
+            "description": "D\u00e9pendances disponibles"
+          },
+          "503": {
+            "description": "D\u00e9pendance indisponible"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "M\u00e9triques Prometheus",
+        "responses": {
+          "200": {
+            "description": "M\u00e9triques au format texte"
+          }
+        }
+      }
+    },
+    "/api/dashboard": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Indicateurs, s\u00e9ries et qualit\u00e9",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Days"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tableau de bord"
+          }
+        }
+      }
+    },
+    "/api/forecast": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Pr\u00e9visions gasoil et Brent",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/HistoryDays"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pr\u00e9visions \u00e0 7, 30 et 90 jours avec intervalles de confiance et m\u00e9triques de backtest"
+          },
+          "400": {
+            "description": "Param\u00e8tre invalide"
+          }
+        }
+      }
+    },
+    "/api/alerts": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Lister les r\u00e8gles et leur \u00e9tat",
+        "responses": {
+          "200": {
+            "description": "R\u00e8gles actives, r\u00e9tablies ou en pause"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Cr\u00e9er une r\u00e8gle d'alerte",
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertRuleInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "R\u00e8gle cr\u00e9\u00e9e"
+          },
+          "400": {
+            "description": "R\u00e8gle invalide"
+          }
+        }
+      }
+    },
+    "/api/alerts/{id}": {
+      "put": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Modifier une r\u00e8gle d'alerte",
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertRuleInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "R\u00e8gle modifi\u00e9e"
+          },
+          "400": {
+            "description": "R\u00e8gle invalide"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Supprimer une r\u00e8gle d'alerte",
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "R\u00e8gle supprim\u00e9e"
+          },
+          "400": {
+            "description": "R\u00e8gle introuvable"
+          }
+        }
+      }
+    },
+    "/api/observations": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Historique filtr\u00e9",
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Product"
+          },
+          {
+            "$ref": "#/components/parameters/Days"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Observations"
+          },
+          "401": {
+            "description": "Authentification requise"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Ajouter une observation",
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObservationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Observation cr\u00e9\u00e9e"
+          },
+          "400": {
+            "description": "Entr\u00e9e invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/history": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Historique pagin\u00e9 avec filtres",
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Product"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "name": "supplier",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "min_price",
+            "in": "query",
+            "schema": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "max_price",
+            "in": "query",
+            "schema": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historique filtr\u00e9 et pagin\u00e9"
+          },
+          "401": {
+            "description": "Authentification requise"
+          }
+        }
+      }
+    },
+    "/api/history/compare": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Comparer deux p\u00e9riodes",
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comparaison par produit"
+          },
+          "400": {
+            "description": "P\u00e9riodes invalides"
+          },
+          "401": {
+            "description": "Authentification requise"
+          }
+        }
+      }
+    },
+    "/api/collect": {
+      "post": {
+        "tags": [
+          "market"
+        ],
+        "summary": "D\u00e9clencher une collecte imm\u00e9diate",
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "R\u00e9sultat de collecte"
+          },
+          "401": {
+            "description": "Authentification requise"
+          }
+        }
+      }
+    },
+    "/api/logs": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Derniers journaux de collecte",
+        "responses": {
+          "200": {
+            "description": "Journaux"
+          }
+        }
+      }
+    },
+    "/api/benchmarks": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Derniers indicateurs de march\u00e9 non ex\u00e9cutables",
+        "parameters": [
+          {
+            "name": "product",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "gasoil",
+                "bitume"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Benchmarks s\u00e9par\u00e9s des devis fournisseurs"
+          }
+        }
+      }
+    },
+    "/api/suppliers": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Canaux fournisseurs officiels",
+        "parameters": [
+          {
+            "name": "product",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "gasoil",
+                "bitume"
+              ]
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "R\u00e9pertoire SQL des voies de contact"
+          }
+        }
+      }
+    },
+    "/api/procurement-guide": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Guide de sourcing et processus d'achat",
+        "parameters": [
+          {
+            "name": "product",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "gasoil",
+                "bitume"
+              ],
+              "default": "gasoil"
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "all"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Contexte march\u00e9, fournisseurs, RFQ et \u00e9tapes de contr\u00f4le"
+          },
+          "400": {
+            "description": "Filtre invalide"
+          }
+        }
+      }
+    },
+    "/api/procurements": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Historique des achats",
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Achats et impacts calcul\u00e9s"
+          },
+          "401": {
+            "description": "Authentification requise"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "market"
+        ],
+        "summary": "\u00c9valuer et enregistrer un achat",
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcurementInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Achat enregistr\u00e9"
+          },
+          "400": {
+            "description": "Entr\u00e9e invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/export.csv": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Exporter en CSV",
+        "responses": {
+          "200": {
+            "description": "Fichier CSV"
+          }
+        }
+      }
+    },
+    "/export.xlsx": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Exporter en Excel",
+        "responses": {
+          "200": {
+            "description": "Fichier XLSX"
+          }
         }
       }
     }

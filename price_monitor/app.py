@@ -30,6 +30,7 @@ from .openapi import OPENAPI_SPEC
 from .services.export import csv_bytes, xlsx_bytes
 from .services.forecasting import build_forecast
 from .services.alerts import AlertManager
+from .services.procurement import build_procurement_guide
 from .services.scheduler import CollectionScheduler, run_collection
 
 
@@ -298,6 +299,17 @@ class Handler(BaseHTTPRequestHandler):
                 )
             if parsed.path == "/api/logs":
                 return self.send_json({"logs": database.logs()})
+            if parsed.path == "/api/benchmarks":
+                product = query.get("product", [None])[0] or None
+                return self.send_json({"benchmarks": database.latest_benchmarks(product=product)})
+            if parsed.path == "/api/suppliers":
+                product = query.get("product", [None])[0] or None
+                region = query.get("region", [None])[0] or None
+                return self.send_json({"suppliers": database.supplier_channels(product, region)})
+            if parsed.path == "/api/procurement-guide":
+                product = query.get("product", ["gasoil"])[0]
+                region = query.get("region", ["all"])[0]
+                return self.send_json(build_procurement_guide(database, product, region))
             if parsed.path == "/api/procurements":
                 if not self._protect_api():
                     return

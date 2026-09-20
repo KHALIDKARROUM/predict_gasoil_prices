@@ -117,6 +117,15 @@ OPENAPI_SPEC = {
             "post": {"tags": ["market"], "summary": "Déclencher une collecte immédiate", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "responses": {"200": {"description": "Résultat de collecte"}, "401": {"description": "Authentification requise"}}}
         },
         "/api/logs": {"get": {"tags": ["market"], "summary": "Derniers journaux de collecte", "responses": {"200": {"description": "Journaux"}}}},
+        "/api/benchmarks": {
+            "get": {"tags": ["market"], "summary": "Derniers indicateurs de marché non exécutables", "parameters": [{"name": "product", "in": "query", "schema": {"type": "string", "enum": ["gasoil", "bitume"]}}], "responses": {"200": {"description": "Benchmarks séparés des devis fournisseurs"}}}
+        },
+        "/api/suppliers": {
+            "get": {"tags": ["market"], "summary": "Canaux fournisseurs officiels", "parameters": [{"name": "product", "in": "query", "schema": {"type": "string", "enum": ["gasoil", "bitume"]}}, {"name": "region", "in": "query", "schema": {"type": "string"}}], "responses": {"200": {"description": "Répertoire SQL des voies de contact"}}}
+        },
+        "/api/procurement-guide": {
+            "get": {"tags": ["market"], "summary": "Guide de sourcing et processus d'achat", "parameters": [{"name": "product", "in": "query", "schema": {"type": "string", "enum": ["gasoil", "bitume"], "default": "gasoil"}}, {"name": "region", "in": "query", "schema": {"type": "string", "default": "all"}}], "responses": {"200": {"description": "Contexte marché, fournisseurs, RFQ et étapes de contrôle"}, "400": {"description": "Filtre invalide"}}}
+        },
         "/api/procurements": {
             "get": {"tags": ["market"], "summary": "Historique des achats", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "responses": {"200": {"description": "Achats et impacts calculés"}, "401": {"description": "Authentification requise"}}},
             "post": {"tags": ["market"], "summary": "Évaluer et enregistrer un achat", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "requestBody": {"required": True, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProcurementInput"}}}}, "responses": {"201": {"description": "Achat enregistré"}, "400": {"description": "Entrée invalide", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}}},

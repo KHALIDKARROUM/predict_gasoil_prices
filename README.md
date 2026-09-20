@@ -6,9 +6,11 @@ Application de suivi des prix internationaux du gasoil, du Brent et du bitume
 - collecte manuelle ou planifiée cinq fois par jour à **08:00, 11:00, 14:00, 17:00 et 20:00** ;
 - historique réel de cinq ans pour le Brent et le gasoil, issu des séries EIA publiées par FRED ;
 - connecteurs FRED (séries `DCOILBRENTEU` et `DDFUELNYH`) et Alpha Vantage (`BRENT`) via variables d'environnement ;
+- indicateur bitume/asphalte `WPU058` collecté gratuitement et sans clé via l'API publique BLS, stocké séparément des prix négociables ;
 - stockage SQLite ou MySQL 8 sélectionnable dans `.env`, avec migrations suivies dans `sql/mysql_migrations/` ;
 - contrôle de qualité, validation stricte des dates et unités, déduplication idempotente, date de publication distincte de la date de collecte, variation absolue et en pourcentage ;
 - saisie validée des devis, commandes ou factures de bitume ;
+- répertoire SQL de canaux fournisseurs officiels, filtré par produit et région, avec processus RFQ, contrôle de contrepartie et calcul du coût rendu ;
 - tableau de bord responsive, graphiques de tendance, moyennes/minimums/maximums, journal des collectes ;
 - prévisions statistiques à 7, 30 et 90 jours pour le gasoil et le Brent, avec bandes de confiance et validation historique ;
 - exports CSV et Excel `.xlsx` ;
@@ -17,12 +19,12 @@ Application de suivi des prix internationaux du gasoil, du Brent et du bitume
 
 ## Démarrage rapide
 
-Depuis le dossier parent :
+Depuis le dossier `repo_push` :
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r price_monitor\requirements.txt
+pip install -r requirements.txt
 python -m price_monitor.app
 ```
 
@@ -35,7 +37,7 @@ Pour utiliser MySQL, copiez `.env.example` vers `.env`, configurez `PRICE_MONITO
 Installer les dépendances puis lancer la suite automatisée :
 
 ```powershell
-..\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pytest
 ```
      
 Les tests couvrent la validation et la persistance SQLite, les calculs du tableau de bord, les exports CSV/Excel, l'import du snapshot réel EIA/FRED, les collectes complètes, partielles ou en échec, ainsi que le schéma et le moteur de migrations MySQL. Pour exécuter aussi le test d'intégration MySQL, définissez `RUN_MYSQL_TESTS=1` avec des paramètres `.env` valides.
@@ -46,7 +48,15 @@ Le projet démarre avec un snapshot réel de cinq ans dans `data/processed/marke
 python scripts/prepare_market_data.py --years 5 --refresh
 ```
 
-Pour les collectes quotidiennes en direct, renseigner `FRED_API_KEY` puis conserver `PRICE_MONITOR_DEMO=false`. Le bitume est volontairement saisi depuis les sources internes de l'entreprise, conformément au rapport.
+Pour les collectes quotidiennes en direct, renseigner `FRED_API_KEY` puis conserver `PRICE_MONITOR_DEMO=false`. La clé FRED est gratuite après inscription. L'indice BLS `WPU058` ne demande pas de clé.
+
+Le projet distingue volontairement trois types de données :
+
+- **gasoil** : `DDFUELNYH`, prix spot FOB New York Harbor en USD/gallon — benchmark de négociation, pas prix rendu à destination ;
+- **bitume — indicateur public** : `WPU058`, indice mensuel américain de tendance, **pas** un prix en USD/tonne ;
+- **bitume — prix achetable** : devis, commandes ou factures fournisseur enregistrés en USD/tonne avec grade, origine, Incoterm et date.
+
+Il n'existe pas de prix spot mondial gratuit et exécutable du bitume dans une API publique comparable à une cotation boursière. Une décision d'achat doit donc comparer des devis homogènes. L'application ne convertit jamais l'indice BLS en faux prix USD/tonne.
 
 ## Analyse exploratoire
 
@@ -81,6 +91,9 @@ Sans clé configurée, `/api/collect` et `/api/observations` répondent avec une
 | GET | `/api/dashboard?days=30` | indicateurs, séries et derniers relevés |
 | GET | `/api/forecast?history_days=1825` | prévisions gasoil et Brent à 7, 30 et 90 jours, bandes de confiance et backtest |
 | GET | `/api/alerts` | règles d'alerte et états courants |
+| GET | `/api/benchmarks?product=bitume` | derniers indicateurs publics, séparés des devis |
+| GET | `/api/suppliers?product=bitume&region=europe` | canaux fournisseurs stockés en SQL |
+| GET | `/api/procurement-guide?product=gasoil&region=africa_middle_east` | contexte, fournisseurs, RFQ et étapes d'achat |
 | POST | `/api/alerts` | créer une règle (clé API) |
 | PUT / DELETE | `/api/alerts/{id}` | modifier, mettre en pause ou supprimer une règle (clé API) |
 | GET | `/api/observations?product=bitume` | historique filtré (clé API) |
@@ -127,6 +140,21 @@ L'application calcule :
 - l'écart du prix unitaire et l'impact total par rapport au dernier prix marché connu du produit.
 
 L'historique est disponible via `GET /api/procurements?limit=100` et dans la section « Achats » du tableau de bord.
+
+## Où acheter et comment acheter
+
+La section « Où & comment acheter » ne place aucune commande automatiquement. Elle fournit des voies de contact officielles vers des producteurs, distributeurs ou services B2B et un processus de contrôle :
+
+1. définir le grade et la norme (`EN 590` pour le diesel, `EN 12591`/`ASTM D946` pour le bitume) ;
+2. envoyer le même RFQ à au moins trois vendeurs avec quantité, destination, fenêtre et Incoterm 2020 ;
+3. vérifier société, licence, bénéficiaire effectif, sanctions, références et compte bancaire ;
+4. comparer le coût rendu : marchandise + fret + assurance + inspection + droits/taxes + stockage/chauffage + frais financiers ± change ;
+5. contractualiser qualité, documents, inspection, tolérances, paiement et réclamations ;
+6. privilégier un crédit documentaire, un crédit fournisseur approuvé ou un autre mécanisme sécurisé plutôt qu'un prépaiement à un vendeur non vérifié.
+
+Pour le bitume, le RFQ doit aussi préciser le grade, le conditionnement, la température, le coût de maintien en chauffe et les surestaries. Les entreprises du répertoire sont des exemples de voies de contact officielles, pas une recommandation ni une garantie de disponibilité.
+
+Les deux nouvelles tables sont `market_benchmarks` et `supplier_channels`. Elles sont créées par la migration `007_market_benchmarks_and_suppliers.sql` dans SQLite et MySQL.
 
 ## Passage en production
 

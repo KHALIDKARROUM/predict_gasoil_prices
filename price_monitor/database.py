@@ -33,6 +33,88 @@ PURCHASE_UNITS = {
     "bitume": "tonne",
 }
 
+PROCUREMENT_PRODUCTS = {"gasoil", "bitume"}
+
+SUPPLIER_CHANNEL_ROWS = [
+    (
+        "Shell Commercial Fuels", "gasoil", "global",
+        "Afrique, Amériques, Asie/Moyen-Orient et plusieurs marchés européens",
+        "Contact commercial B2B local ou distributeur agréé",
+        "Contrat local; livraison camion-citerne ou dépôt selon le pays",
+        "Demander EN 590 (soufre 10 ppm) ou la norme locale équivalente",
+        "https://www.shell.com/business-customers/commercial-fuels.html",
+        "https://www.shell.com/business-customers/commercial-fuels/contact-commercial-fuels.html",
+        "Vérifier la disponibilité, la licence d'importation et le volume minimum auprès de l'entité locale.",
+        10,
+    ),
+    (
+        "TotalEnergies - réseau entreprises", "gasoil", "global",
+        "Réseau international de filiales et de sites clients par pays",
+        "Filiale locale, service grands comptes ou distributeur B2B",
+        "Conditions, crédit et livraison négociés dans le pays de destination",
+        "Préciser EN 590/ASTM, teneur en soufre, quantité, terminal et date de livraison",
+        "https://totalenergies.com/company/energy-expertise/ship-market",
+        "https://totalenergies.com/clients-websites",
+        "Choisir le site officiel du pays de livraison et demander une offre écrite à l'entité contractante.",
+        20,
+    ),
+    (
+        "Négociant ou distributeur agréé au terminal", "gasoil", "local",
+        "Terminal pétrolier ou dépôt agréé le plus proche de la destination",
+        "Appel d'offres auprès de trois distributeurs titulaires d'une licence",
+        "Ex-rack/EXW, FCA, DAP ou livraison camion selon l'infrastructure",
+        "Spécification nationale, certificat d'analyse, SDS et preuve d'origine",
+        "",
+        "",
+        "Contrôler le registre du commerce, la licence énergie, les sanctions et les coordonnées bancaires hors e-mail.",
+        30,
+    ),
+    (
+        "Shell Bitumen", "bitume", "global",
+        "Réseau de production, dépôts et distribution dans de nombreux marchés",
+        "Demande de devis B2B auprès de l'équipe bitume du pays",
+        "Vrac chauffé, camion ou navire selon la destination et le volume",
+        "Préciser EN 12591/ASTM D946, grade, température, emballage et application",
+        "https://www.shell.com/business-customers/bitumen.html",
+        "https://www.shell.com/business-customers/bitumen.html",
+        "La disponibilité et le point de chargement varient par pays; obtenir un devis avec Incoterm et validité.",
+        10,
+    ),
+    (
+        "TotalEnergies Bitumen", "bitume", "europe",
+        "Sept raffineries et opérations annoncées dans quinze pays européens",
+        "Équipe commerciale locale ou portail Bitumen Online pour clients admis",
+        "Vrac chauffé; prix fixe ou formule selon le marché et le contrat",
+        "Bitume routier, modifié ou industriel; préciser grade et norme",
+        "https://bitumen.totalenergies.com/",
+        "https://bitumen.totalenergies.com/digital-portal-bitumen-customers",
+        "L'accès au portail et aux prix est réservé aux clients; demander l'ouverture d'un compte fournisseur.",
+        20,
+    ),
+    (
+        "Nynas Bitumen", "bitume", "europe",
+        "Pays nordiques, États baltes, Royaume-Uni et export selon disponibilité",
+        "Contact commercial régional ou export",
+        "Contrat annuel ou devis spot; logistique chauffée selon le site",
+        "Bitumes routiers et modifiés; demander PDS, SDS et déclaration de performance",
+        "https://nynas.com/en/products/bitumen/",
+        "https://nynas.com/en/products/bitumen/our-offer/",
+        "Utiliser le sélecteur de marché officiel ou le contact export indiqué par Nynas.",
+        30,
+    ),
+    (
+        "Puma Energy Bitumen", "bitume", "global",
+        "Marchés desservis par le réseau Puma Energy, notamment Afrique et Asie-Pacifique",
+        "Contact technique et commercial bitume",
+        "Vrac, conteneur bitume et solutions navire-camion selon le marché",
+        "Grades conformes notamment à EN 12591 ou AS 2008 selon le produit",
+        "https://pumaenergy.com/bitumen/",
+        "https://pumaenergy.com/bitumen/bitumen-products/",
+        "Confirmer le territoire couvert, le point de chargement et le coût du maintien en température.",
+        40,
+    ),
+]
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS price_observations (
@@ -103,6 +185,42 @@ CREATE TABLE IF NOT EXISTS procurement_purchases (
 );
 CREATE INDEX IF NOT EXISTS idx_procurement_purchase_date
   ON procurement_purchases(purchase_date, product);
+CREATE TABLE IF NOT EXISTS market_benchmarks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    product TEXT NOT NULL CHECK(product IN ('gasoil', 'bitume')),
+    label TEXT NOT NULL,
+    value REAL NOT NULL CHECK(value > 0),
+    unit TEXT NOT NULL,
+    geography TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_date TEXT NOT NULL,
+    collected_at TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    variation REAL,
+    variation_pct REAL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(code, source_date, value)
+);
+CREATE INDEX IF NOT EXISTS idx_market_benchmarks_code_date
+  ON market_benchmarks(code, source_date);
+CREATE TABLE IF NOT EXISTS supplier_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    product TEXT NOT NULL CHECK(product IN ('gasoil', 'bitume')),
+    region TEXT NOT NULL,
+    coverage TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    typical_terms TEXT NOT NULL,
+    specifications TEXT NOT NULL,
+    website_url TEXT NOT NULL DEFAULT '',
+    contact_url TEXT NOT NULL DEFAULT '',
+    buyer_note TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 100,
+    UNIQUE(name, product, region)
+);
 """
 
 
@@ -159,6 +277,12 @@ class DatabaseBackend(Protocol):
     def create_procurement(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
     def procurements(self, limit: int = 100) -> list[dict[str, Any]]: ...
+
+    def insert_benchmark(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+    def latest_benchmarks(self, product: str | None = None, limit: int = 20) -> list[dict[str, Any]]: ...
+
+    def supplier_channels(self, product: str | None = None, region: str | None = None) -> list[dict[str, Any]]: ...
 
     def history(
         self,
@@ -321,6 +445,7 @@ class SQLiteDatabase:
             self._deduplicate_observations(conn)
             self._ensure_observation_identity(conn)
             self._seed_sources(conn)
+            self._seed_supplier_channels(conn)
             count = conn.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0]
             if count == 0:
                 imported = self._seed_real_data(conn)
@@ -339,11 +464,20 @@ class SQLiteDatabase:
             ("fred_brent", "Pétrole Brent", "EIA/FRED - DCOILBRENTEU", "quotidienne"),
             ("alpha_brent", "Pétrole Brent", "Alpha Vantage - BRENT", "quotidienne"),
             ("internal_bitumen", "Bitume", "Devis et factures internes", "à la demande"),
-            ("fred_asphalt", "Indice bitume/asphalte", "FRED - PCU324121324121", "mensuelle"),
+            ("bls_asphalt_ppi", "Indice bitume/asphalte (proxy)", "U.S. BLS - WPU058", "mensuelle"),
         ]
         conn.executemany(
             "INSERT OR IGNORE INTO data_sources(code, label, provider, frequency) VALUES(?,?,?,?)",
             rows,
+        )
+
+    def _seed_supplier_channels(self, conn: Any) -> None:
+        conn.executemany(
+            """INSERT OR IGNORE INTO supplier_channels
+            (name, product, region, coverage, channel, typical_terms, specifications,
+             website_url, contact_url, buyer_note, sort_order)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            SUPPLIER_CHANNEL_ROWS,
         )
 
     def _seed_real_data(self, conn: Any) -> int:
@@ -486,6 +620,126 @@ class SQLiteDatabase:
                 raise
             record = conn.execute("SELECT * FROM price_observations WHERE id=?", (cur.lastrowid,)).fetchone()
             return dict(record)
+
+    def insert_benchmark(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Persist a non-tradable market indicator without mixing it with quotes."""
+        code = str(payload.get("code") or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9_-]{2,64}", code):
+            raise ValueError("Le code de l'indicateur est invalide.")
+        product = str(payload.get("product") or "").strip().lower()
+        if product not in PROCUREMENT_PRODUCTS:
+            raise ValueError("L'indicateur doit concerner le gasoil ou le bitume.")
+        try:
+            value = float(payload.get("value"))
+        except (TypeError, ValueError):
+            raise ValueError("La valeur de l'indicateur doit être numérique.") from None
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("La valeur de l'indicateur doit être supérieure à zéro.")
+        label = str(payload.get("label") or "").strip()[:180]
+        unit = str(payload.get("unit") or "").strip()[:64]
+        source = str(payload.get("source") or "").strip()[:180]
+        if not label or not unit or not source:
+            raise ValueError("Le libellé, l'unité et la source de l'indicateur sont obligatoires.")
+        source_date = self._source_date_value(payload.get("source_date"))
+        collected_at = self._collected_at_value(
+            payload.get("collected_at")
+            or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        )
+        geography = str(payload.get("geography") or "International")[:100]
+        source_url = str(payload.get("source_url") or "")[:500]
+        notes = str(payload.get("notes") or "")[:500]
+
+        with self._lock, self.connect() as conn:
+            existing = conn.execute(
+                """SELECT * FROM market_benchmarks
+                WHERE code=? AND source_date=? AND value=? ORDER BY id LIMIT 1""",
+                (code, source_date, value),
+            ).fetchone()
+            if existing:
+                return dict(existing)
+            previous = conn.execute(
+                "SELECT value FROM market_benchmarks WHERE code=? ORDER BY source_date DESC, id DESC LIMIT 1",
+                (code,),
+            ).fetchone()
+            previous_value = float(previous["value"]) if previous else None
+            variation = round(value - previous_value, 6) if previous_value is not None else None
+            variation_pct = round((variation / previous_value) * 100, 4) if previous_value else None
+            try:
+                cursor = conn.execute(
+                    """INSERT INTO market_benchmarks
+                    (code, product, label, value, unit, geography, source, source_date,
+                     collected_at, source_url, notes, variation, variation_pct)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        code, product, label, value, unit, geography, source, source_date,
+                        self._datetime_value(collected_at), source_url, notes, variation, variation_pct,
+                    ),
+                )
+            except Exception:
+                existing = conn.execute(
+                    """SELECT * FROM market_benchmarks
+                    WHERE code=? AND source_date=? AND value=? ORDER BY id LIMIT 1""",
+                    (code, source_date, value),
+                ).fetchone()
+                if existing:
+                    return dict(existing)
+                raise
+            record = conn.execute(
+                "SELECT * FROM market_benchmarks WHERE id=?", (cursor.lastrowid,)
+            ).fetchone()
+            return dict(record)
+
+    def latest_benchmarks(
+        self, product: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        if product is not None:
+            product = product.strip().lower()
+            if product not in PROCUREMENT_PRODUCTS:
+                raise ValueError("Produit inconnu. Utilisez gasoil ou bitume.")
+        safe_limit = max(1, min(int(limit), 100))
+        clauses = ["product=?"] if product else []
+        params: list[Any] = [product] if product else []
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""SELECT * FROM market_benchmarks {where}
+                ORDER BY source_date DESC, collected_at DESC, id DESC""",
+                params,
+            ).fetchall()
+        latest_by_code: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            item = dict(row)
+            latest_by_code.setdefault(str(item["code"]), item)
+            if len(latest_by_code) >= safe_limit:
+                break
+        return list(latest_by_code.values())
+
+    def supplier_channels(
+        self, product: str | None = None, region: str | None = None
+    ) -> list[dict[str, Any]]:
+        clauses = ["active=1"]
+        params: list[Any] = []
+        if product:
+            product = product.strip().lower()
+            if product not in PROCUREMENT_PRODUCTS:
+                raise ValueError("Produit inconnu. Utilisez gasoil ou bitume.")
+            clauses.append("product=?")
+            params.append(product)
+        normalized_region = str(region or "").strip().lower()
+        if normalized_region and normalized_region not in {"all", "global"}:
+            if not re.fullmatch(r"[a-z_]{2,32}", normalized_region):
+                raise ValueError("Région invalide.")
+            clauses.append("region IN ('global', ?)")
+            params.append(normalized_region)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""SELECT id, name, product, region, coverage, channel, typical_terms,
+                specifications, website_url, contact_url, buyer_note
+                FROM supplier_channels WHERE {' AND '.join(clauses)}
+                ORDER BY product, sort_order, name""",
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def create_procurement(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create a purchase estimate and compare it with the latest USD market price."""
@@ -1188,6 +1442,7 @@ class MySQLDatabase(SQLiteDatabase):
             self._deduplicate_mysql_observations(connection)
             self._ensure_mysql_observation_identity(connection)
             self._seed_sources(connection)
+            self._seed_supplier_channels(connection)
             count = connection.execute("SELECT COUNT(*) AS count FROM price_observations").fetchone()["count"]
             if count == 0:
                 imported = self._seed_real_data(connection)
@@ -1200,11 +1455,20 @@ class MySQLDatabase(SQLiteDatabase):
             ("fred_brent", "Pétrole Brent", "EIA/FRED - DCOILBRENTEU", "quotidienne"),
             ("alpha_brent", "Pétrole Brent", "Alpha Vantage - BRENT", "quotidienne"),
             ("internal_bitumen", "Bitume", "Devis et factures internes", "à la demande"),
-            ("fred_asphalt", "Indice bitume/asphalte", "FRED - PCU324121324121", "mensuelle"),
+            ("bls_asphalt_ppi", "Indice bitume/asphalte (proxy)", "U.S. BLS - WPU058", "mensuelle"),
         ]
         connection.executemany(
             "INSERT IGNORE INTO data_sources(code, label, provider, frequency) VALUES(?,?,?,?)",
             rows,
+        )
+
+    def _seed_supplier_channels(self, connection: _MySQLConnection) -> None:
+        connection.executemany(
+            """INSERT IGNORE INTO supplier_channels
+            (name, product, region, coverage, channel, typical_terms, specifications,
+             website_url, contact_url, buyer_note, sort_order)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            SUPPLIER_CHANNEL_ROWS,
         )
 
     @staticmethod

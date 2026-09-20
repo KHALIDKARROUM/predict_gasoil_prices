@@ -191,6 +191,34 @@ def test_create_procurement_rejects_invalid_currency_and_exchange_rate(empty_dat
         empty_database.create_procurement(payload)
 
 
+def test_market_benchmark_is_persisted_without_becoming_a_bitumen_quote(empty_database):
+    benchmark = empty_database.insert_benchmark(
+        {
+            "code": "bls_wpu058",
+            "product": "bitume",
+            "label": "Indice PPI asphalte",
+            "value": 546.938,
+            "unit": "indice (déc. 1984 = 100)",
+            "geography": "États-Unis",
+            "source": "U.S. BLS Public Data API - WPU058",
+            "source_date": "2026-08-01",
+        }
+    )
+
+    assert benchmark["value"] == 546.938
+    assert empty_database.latest_benchmarks("bitume")[0]["code"] == "bls_wpu058"
+    assert empty_database.observations(product="bitume", days=3650) == []
+
+
+def test_supplier_directory_supports_product_and_region_filters(empty_database):
+    europe = empty_database.supplier_channels("bitume", "europe")
+    gasoil = empty_database.supplier_channels("gasoil", "all")
+
+    assert {row["name"] for row in europe} >= {"Shell Bitumen", "TotalEnergies Bitumen", "Nynas Bitumen"}
+    assert all(row["product"] == "bitume" for row in europe)
+    assert all(row["product"] == "gasoil" for row in gasoil)
+
+
 def test_alert_rule_crud_and_transition_status(empty_database):
     rule = empty_database.create_alert_rule(
         {"product": "brent", "direction": "above", "threshold": 90, "channel": "email"}
