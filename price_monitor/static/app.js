@@ -5,6 +5,8 @@ const PRODUCT_META = {
 };
 let chart;
 let chartMode = 'indexed';
+let forecastCharts = {};
+let forecastData = null;
 const $ = (selector) => document.querySelector(selector);
 const formatPrice = (value, unit) => value == null ? '—' : `${Number(value).toLocaleString('fr-FR', { maximumFractionDigits: 2 })} <small>${unit || ''}</small>`;
 const formatPct = (value) => value == null ? '—' : `${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(2).replace('.', ',')} %`;
@@ -52,6 +54,74 @@ function renderMetrics(metrics) {
     const range = m.min == null ? '—' : `${formatNumber(m.min)}–${formatNumber(m.max)}`;
     return `<article class="metric-card" style="color:${meta.color}"><div class="metric-head"><span class="metric-label">${meta.label}</span><i class="metric-dot" style="background:${meta.color}"></i></div><div class="metric-price">${formatPrice(m.current, m.unit)}</div><span class="trend ${cls}">${m.variation == null ? '—' : (m.variation >= 0 ? '▲' : '▼') + ' ' + formatPct(m.variation)} <span class="muted">vs précédent</span></span><span class="metric-foot"><span>Moy. ${m.average == null ? '—' : formatNumber(m.average)}</span><span class="range">Min–max ${range}</span><span class="count">${m.count || 0} relevés</span></span></article>`;
   }).join('');
+}
+
+function forecastDate(value) {
+  return new Date(`${value}T00:00:00Z`).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+}
+
+function renderForecastProduct(key) {
+  const meta = PRODUCT_META[key];
+  const product = forecastData?.products?.[key];
+  const canvas = $(`#forecast-${key}-chart`);
+  const stats = $(`#forecast-${key}-stats`);
+  if (forecastCharts[key]) { forecastCharts[key].destroy(); delete forecastCharts[key]; }
+  if (!product || product.status !== 'ready') {
+    canvas.hidden = true;
+    stats.innerHTML = `<span class="error-note">${escapeHtml(product?.message || 'Prévision indisponible.')}</span>`;
+    return;
+  }
+  const horizon = $('#forecast-horizon').value;
+  const actual = product.history || [];
+  const future = product.forecasts?.[horizon] || [];
+  const actualValues = actual.map(row => Number(row.value));
+  const labels = [...actual.map(row => row.date), ...future.map(row => row.date)];
+  const bridgeLength = Math.max(0, actual.length - 1);
+  const bridge = (values) => [...Array(bridgeLength).fill(null), actualValues.at(-1), ...values];
+  const lower = bridge(future.map(row => Number(row.lower)));
+  const upper = bridge(future.map(row => Number(row.upper)));
+  const forecast = bridge(future.map(row => Number(row.value)));
+  const actualSeries = [...actualValues, ...Array(future.length).fill(null)];
+  canvas.hidden = false;
+  if (!window.Chart) {
+    stats.innerHTML = '<span class="error-note">Chart.js est indisponible.</span>';
+    return;
+  }
+  const chartContext = canvas.getContext('2d');
+  forecastCharts[key] = new Chart(chartContext, {
+    type: 'line',
+    data: { labels: labels.map(forecastDate), datasets: [
+      { label: 'Borne basse', data: lower, borderColor: 'transparent', backgroundColor: 'rgba(167, 206, 219, .13)', pointRadius: 0, fill: false, spanGaps: true },
+      { label: 'Intervalle de confiance', data: upper, borderColor: 'transparent', backgroundColor: 'rgba(167, 206, 219, .13)', pointRadius: 0, fill: '-1', spanGaps: true },
+      { label: 'Réel', data: actualSeries, borderColor: meta.color, backgroundColor: meta.color, borderWidth: 2, pointRadius: 0, tension: .3, spanGaps: true },
+      { label: 'Prévision', data: forecast, borderColor: '#f0f7f9', backgroundColor: '#f0f7f9', borderWidth: 2, borderDash: [6, 4], pointRadius: 0, tension: .3, spanGaps: true }
+    ] },
+    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#081d29', padding: 10, callbacks: { label: item => ` ${item.dataset.label}: ${formatNumber(item.raw, item.raw < 10 ? 3 : 2)} ${meta.purchaseUnit === 'gallon' ? 'USD/gallon' : 'USD/baril'}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#6c8995', maxTicksLimit: 8, font: { size: 10 } } }, y: { grid: { color: 'rgba(167,206,219,.08)' }, ticks: { color: '#6c8995', font: { size: 10 }, callback: value => formatNumber(value, value < 10 ? 3 : 0) }, border: { display: false } } } }
+  });
+  const lastActual = actual.at(-1);
+  const finalForecast = future.at(-1);
+  const backtest = product.backtest?.[horizon] || {};
+  const change = lastActual?.value ? ((finalForecast.value - lastActual.value) / lastActual.value) * 100 : null;
+  stats.innerHTML = `<div><span>Dernier réel</span><strong>${formatNumber(lastActual?.value, lastActual?.value < 10 ? 3 : 2)}</strong></div><div><span>À J+${horizon}</span><strong>${formatNumber(finalForecast?.value, finalForecast?.value < 10 ? 3 : 2)}</strong><em class="${change >= 0 ? 'up' : 'down'}">${formatPct(change)}</em></div><div><span>MAPE backtest</span><strong>${backtest.mape == null ? '—' : `${formatNumber(backtest.mape, 1)} %`}</strong></div>`;
+}
+
+function renderForecast() {
+  renderForecastProduct('gasoil');
+  renderForecastProduct('brent');
+}
+
+async function loadForecast() {
+  try {
+    const response = await fetch('/api/forecast?history_days=1825');
+    if (!response.ok) throw new Error('Impossible de calculer les prévisions.');
+    forecastData = await response.json();
+    const generated = forecastData.generated_at ? formatDate(forecastData.generated_at, true) : 'à l’instant';
+    $('#forecast-status').textContent = `Modèle de tendance amortie · validation historique · calculé ${generated}`;
+    renderForecast();
+  } catch (error) {
+    $('#forecast-status').textContent = error.message;
+    ['gasoil', 'brent'].forEach(key => { $(`#forecast-${key}-stats`).innerHTML = '<span class="error-note">Prévision momentanément indisponible.</span>'; });
+  }
 }
 
 function renderChart(series) {
@@ -233,7 +303,8 @@ document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('cl
 }));
 
 $('#period-select').addEventListener('change', loadDashboard);
-$('#refresh-btn').addEventListener('click', () => { loadDashboard(); loadLogs(); loadHistory(historyPage); loadProcurements(); showToast('Tableau de bord actualisé.'); });
+$('#forecast-horizon').addEventListener('change', renderForecast);
+$('#refresh-btn').addEventListener('click', () => { loadDashboard(); loadForecast(); loadLogs(); loadHistory(historyPage); loadProcurements(); showToast('Tableau de bord actualisé.'); });
 $('#collect-btn').addEventListener('click', async () => { const button = $('#collect-btn'); button.disabled = true; button.innerHTML = 'Collecte en cours…'; try { const response = await protectedFetch('/api/collect', { method: 'POST', headers: { 'Content-Type': 'application/json' } }); const result = await response.json(); if (!response.ok || result.status === 'error') throw new Error(result.message || result.error || 'La collecte a échoué.'); showToast(`${result.rows} relevé(s) enregistré(s).`); } catch (error) { showToast(error.message, true); } finally { button.disabled = false; button.innerHTML = '<span>↻</span> Lancer une collecte'; loadDashboard(); loadLogs(); } });
 $('#bitumen-form').addEventListener('submit', async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); data.product = 'bitume'; data.unit = 'USD/tonne'; try { const response = await protectedFetch('/api/observations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Échec de l’enregistrement.'); showToast('Relevé bitume enregistré avec succès.'); event.target.reset(); event.target.source_date.value = new Date().toISOString().slice(0, 10); loadDashboard(); loadHistory(historyPage); } catch (error) { showToast(error.message, true); } });
 $('#procurement-product').addEventListener('change', updateProcurementUnits);
@@ -268,4 +339,4 @@ $('#bitumen-form').source_date.value = new Date().toISOString().slice(0, 10);
 $('#procurement-form').purchase_date.value = new Date().toISOString().slice(0, 10);
 setDefaultComparePeriods();
 updateProcurementUnits();
-loadDashboard(); loadLogs(); loadHistory(); loadProcurements();
+loadDashboard(); loadForecast(); loadLogs(); loadHistory(); loadProcurements();

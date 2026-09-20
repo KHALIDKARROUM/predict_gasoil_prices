@@ -13,7 +13,7 @@ class StubDatabase:
     def __init__(self) -> None:
         self.observation_calls = 0
 
-    def observations(self, product=None, days=30):
+    def observations(self, product=None, days=30, limit=600):
         self.observation_calls += 1
         return [{"product": product or "bitume", "days": days}]
 
@@ -78,6 +78,16 @@ def test_protected_routes_accept_api_key_headers(api_server, monkeypatch):
     )
     assert status == 200
     assert database.observation_calls == 1
+
+
+def test_forecast_route_returns_public_market_forecast(api_server):
+    server, database = api_server
+
+    status, _, body = request(server, "GET", "/api/forecast?history_days=90")
+
+    assert status == 200
+    assert database.observation_calls == 2
+    assert body and b'"products"' in body
 
 
 def test_rate_limiter_returns_retry_after_for_production_requests(api_server, monkeypatch):

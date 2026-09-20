@@ -10,6 +10,7 @@ Application de suivi des prix internationaux du gasoil, du Brent et du bitume
 - contrôle de qualité, validation stricte des dates et unités, déduplication idempotente, date de publication distincte de la date de collecte, variation absolue et en pourcentage ;
 - saisie validée des devis, commandes ou factures de bitume ;
 - tableau de bord responsive, graphiques de tendance, moyennes/minimums/maximums, journal des collectes ;
+- prévisions statistiques à 7, 30 et 90 jours pour le gasoil et le Brent, avec bandes de confiance et validation historique ;
 - exports CSV et Excel `.xlsx` ;
 - notebook d'exploration couvrant tendances, volatilité, corrélation, saisonnalité, anomalies, qualité et prévision naïve ;
 - mode démonstration disponible en option avec `PRICE_MONITOR_DEMO=true`.
@@ -57,6 +58,12 @@ python -m jupyter notebook notebooks/market_price_eda.ipynb
 
 Les séries Brent et gasoil sont conservées dans leurs unités publiées respectives : USD/baril et USD/gallon. Les comparaisons de volatilité et de corrélation utilisent les variations journalières afin d'éviter de confondre échelle de prix et co-mouvement.
 
+## Prévisions
+
+La route `GET /api/forecast?history_days=1825` calcule des projections à 7, 30 et 90 jours pour le gasoil et le Brent. Le service agrège les relevés au jour, applique un modèle de tendance amortie de Holt et retourne, pour chaque horizon, la valeur prévue, une bande de confiance à 95 % ainsi que les métriques de backtest (MAE, RMSE, MAPE et nombre de relevés évalués). Le tableau de bord affiche les 120 derniers relevés réels, la projection sélectionnée et la MAPE correspondante.
+
+Un historique d'au moins 30 jours est nécessaire pour produire une prévision. Les données à moins de 30 relevés sont signalées comme insuffisantes plutôt que remplacées par une valeur inventée. Les bandes de confiance décrivent l'incertitude historique du modèle et ne constituent pas une garantie de prix.
+
 ## API locale
 
 Les routes d'écriture et l'historique détaillé sont protégés par une clé API. Définissez `PRICE_MONITOR_API_KEY` dans `.env` avec une valeur longue et aléatoire, puis envoyez-la avec `X-API-Key` ou `Authorization: Bearer <clé>`. La clé n'est jamais acceptée dans l'URL.
@@ -72,6 +79,7 @@ Sans clé configurée, `/api/collect` et `/api/observations` répondent avec une
 | Méthode | Route | Rôle |
 |---|---|---|
 | GET | `/api/dashboard?days=30` | indicateurs, séries et derniers relevés |
+| GET | `/api/forecast?history_days=1825` | prévisions gasoil et Brent à 7, 30 et 90 jours, bandes de confiance et backtest |
 | GET | `/api/observations?product=bitume` | historique filtré (clé API) |
 | GET | `/api/history?page=1&page_size=50&product=bitume&supplier=ABC&source=devis&date_from=2026-01-01&date_to=2026-09-15&min_price=400&max_price=700` | historique paginé et filtré (clé API) |
 | GET | `/api/history/compare?period_a_from=2026-01-01&period_a_to=2026-03-31&period_b_from=2026-04-01&period_b_to=2026-06-30` | comparaison de deux périodes (clé API) |

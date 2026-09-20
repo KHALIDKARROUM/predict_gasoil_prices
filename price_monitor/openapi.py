@@ -71,6 +71,9 @@ OPENAPI_SPEC = {
         "/api/dashboard": {
             "get": {"tags": ["market"], "summary": "Indicateurs, séries et qualité", "parameters": [{"$ref": "#/components/parameters/Days"}], "responses": {"200": {"description": "Tableau de bord"}}}
         },
+        "/api/forecast": {
+            "get": {"tags": ["market"], "summary": "Prévisions gasoil et Brent", "parameters": [{"$ref": "#/components/parameters/HistoryDays"}], "responses": {"200": {"description": "Prévisions à 7, 30 et 90 jours avec intervalles de confiance et métriques de backtest"}, "400": {"description": "Paramètre invalide"}}}
+        },
         "/api/observations": {
             "get": {"tags": ["market"], "summary": "Historique filtré", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [{"$ref": "#/components/parameters/Product"}, {"$ref": "#/components/parameters/Days"}], "responses": {"200": {"description": "Observations"}, "401": {"description": "Authentification requise"}}},
             "post": {"tags": ["market"], "summary": "Ajouter une observation", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "requestBody": {"required": True, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ObservationInput"}}}}, "responses": {"201": {"description": "Observation créée"}, "400": {"description": "Entrée invalide", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}}},
@@ -106,6 +109,7 @@ OPENAPI_SPEC = {
 
 OPENAPI_SPEC["components"]["parameters"] = {
     "Days": {"name": "days", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1825, "default": 30}},
+    "HistoryDays": {"name": "history_days", "in": "query", "schema": {"type": "integer", "minimum": 90, "maximum": 1825, "default": 1825}},
     "Product": {"name": "product", "in": "query", "schema": {"type": "string", "enum": ["gasoil", "brent", "bitume"]}},
     "Page": {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1, "default": 1}},
     "PageSize": {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}},

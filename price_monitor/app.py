@@ -25,6 +25,7 @@ from .database import create_database
 from .observability import logger, metrics
 from .openapi import OPENAPI_SPEC
 from .services.export import csv_bytes, xlsx_bytes
+from .services.forecasting import build_forecast
 from .services.scheduler import CollectionScheduler, run_collection
 
 
@@ -236,6 +237,9 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/dashboard":
                 days = max(1, min(1825, int(query.get("days", [30])[0])))
                 return self.send_json(database.dashboard(days))
+            if parsed.path == "/api/forecast":
+                history_days = max(90, min(1825, int(query.get("history_days", [1825])[0])))
+                return self.send_json(build_forecast(database, history_days=history_days))
             if parsed.path == "/api/observations":
                 if not self._protect_api():
                     return
