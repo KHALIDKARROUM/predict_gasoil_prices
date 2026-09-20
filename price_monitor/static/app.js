@@ -7,6 +7,8 @@ let chart;
 let chartMode = 'indexed';
 let forecastCharts = {};
 let forecastData = null;
+let alertRules = [];
+let editingAlertId = null;
 const $ = (selector) => document.querySelector(selector);
 const formatPrice = (value, unit) => value == null ? '—' : `${Number(value).toLocaleString('fr-FR', { maximumFractionDigits: 2 })} <small>${unit || ''}</small>`;
 const formatPct = (value) => value == null ? '—' : `${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(2).replace('.', ',')} %`;
@@ -122,6 +124,70 @@ async function loadForecast() {
     $('#forecast-status').textContent = error.message;
     ['gasoil', 'brent'].forEach(key => { $(`#forecast-${key}-stats`).innerHTML = '<span class="error-note">Prévision momentanément indisponible.</span>'; });
   }
+}
+
+const ALERT_UNITS = { gasoil: 'USD/gallon', brent: 'USD/baril', bitume: 'USD/tonne' };
+const ALERT_CHANNEL_LABELS = { webhook: 'Webhook', email: 'Email', both: 'Webhook + email' };
+const ALERT_STATUS_LABELS = { active: 'Active', recovered: 'Rétablie', muted: 'En pause', normal: 'Surveillée' };
+
+function resetAlertForm() {
+  editingAlertId = null;
+  $('#alert-form').reset();
+  $('#alert-form-title').textContent = 'Créer une règle';
+  $('#alert-save').innerHTML = `Créer l'alerte <span>→</span>`;
+  $('#alert-cancel').hidden = true;
+}
+
+function renderAlertRules() {
+  $('#alert-list').innerHTML = alertRules.length ? alertRules.map(rule => {
+    const meta = PRODUCT_META[rule.product] || { label: rule.product, color: '#a7bac2' };
+    const status = ALERT_STATUS_LABELS[rule.status] || ALERT_STATUS_LABELS.normal;
+    const condition = rule.direction === 'above' ? 'au-dessus de' : 'en-dessous de';
+    const lastValue = rule.last_value == null ? 'Pas encore évaluée' : `Dernier prix : ${formatNumber(rule.last_value, rule.last_value < 10 ? 3 : 2)} ${ALERT_UNITS[rule.product]}`;
+    return `<article class="alert-rule ${rule.status}"><div class="alert-rule-main"><span class="alert-dot"></span><div><strong>${escapeHtml(meta.label)}</strong><p>${condition} <b>${formatNumber(rule.threshold, rule.threshold < 10 ? 3 : 2)} ${ALERT_UNITS[rule.product]}</b></p><small>${lastValue} · ${escapeHtml(ALERT_CHANNEL_LABELS[rule.channel] || rule.channel)}</small></div></div><div class="alert-rule-actions"><span class="alert-status ${rule.status}">${status}</span><button class="text-btn" type="button" data-alert-action="edit" data-alert-id="${rule.id}">Modifier</button><button class="text-btn" type="button" data-alert-action="mute" data-alert-id="${rule.id}">${rule.muted ? 'Réactiver' : 'Mettre en pause'}</button><button class="text-btn danger-btn" type="button" data-alert-action="delete" data-alert-id="${rule.id}">Supprimer</button></div></article>`;
+  }).join('') : '<div class="empty">Aucune règle configurée. Créez un seuil pour commencer la surveillance.</div>';
+}
+
+function renderAlertChannels(channels = {}) {
+  const configured = Object.entries(channels).filter(([key, value]) => key !== 'both' && value).map(([key]) => ALERT_CHANNEL_LABELS[key]);
+  $('#alert-channel-status').textContent = configured.length ? `Canaux configurés : ${configured.join(' · ')}.` : 'Aucun canal de notification n’est configuré. Les règles seront surveillées, mais aucune notification ne sera envoyée.';
+  $('#alert-channel-status').classList.toggle('error-note', !configured.length);
+}
+
+async function loadAlerts() {
+  try {
+    const response = await fetch('/api/alerts');
+    if (!response.ok) throw new Error('Impossible de charger les alertes.');
+    const data = await response.json();
+    alertRules = data.alerts || [];
+    renderAlertChannels(data.channels);
+    renderAlertRules();
+  } catch (error) {
+    $('#alert-list').innerHTML = `<div class="empty error-note">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function editAlert(id) {
+  const rule = alertRules.find(item => item.id === id);
+  if (!rule) return;
+  editingAlertId = id;
+  const form = $('#alert-form');
+  form.product.value = rule.product;
+  form.direction.value = rule.direction;
+  form.threshold.value = rule.threshold;
+  form.channel.value = rule.channel;
+  form.muted.checked = rule.muted;
+  $('#alert-form-title').textContent = 'Modifier la règle';
+  $('#alert-save').innerHTML = `Enregistrer les changements <span>→</span>`;
+  $('#alert-cancel').hidden = false;
+  form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function mutateAlert(id, payload) {
+  const response = await protectedFetch(`/api/alerts/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Impossible de modifier cette alerte.');
+  return result;
 }
 
 function renderChart(series) {
@@ -304,7 +370,7 @@ document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('cl
 
 $('#period-select').addEventListener('change', loadDashboard);
 $('#forecast-horizon').addEventListener('change', renderForecast);
-$('#refresh-btn').addEventListener('click', () => { loadDashboard(); loadForecast(); loadLogs(); loadHistory(historyPage); loadProcurements(); showToast('Tableau de bord actualisé.'); });
+$('#refresh-btn').addEventListener('click', () => { loadDashboard(); loadForecast(); loadAlerts(); loadLogs(); loadHistory(historyPage); loadProcurements(); showToast('Tableau de bord actualisé.'); });
 $('#collect-btn').addEventListener('click', async () => { const button = $('#collect-btn'); button.disabled = true; button.innerHTML = 'Collecte en cours…'; try { const response = await protectedFetch('/api/collect', { method: 'POST', headers: { 'Content-Type': 'application/json' } }); const result = await response.json(); if (!response.ok || result.status === 'error') throw new Error(result.message || result.error || 'La collecte a échoué.'); showToast(`${result.rows} relevé(s) enregistré(s).`); } catch (error) { showToast(error.message, true); } finally { button.disabled = false; button.innerHTML = '<span>↻</span> Lancer une collecte'; loadDashboard(); loadLogs(); } });
 $('#bitumen-form').addEventListener('submit', async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); data.product = 'bitume'; data.unit = 'USD/tonne'; try { const response = await protectedFetch('/api/observations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Échec de l’enregistrement.'); showToast('Relevé bitume enregistré avec succès.'); event.target.reset(); event.target.source_date.value = new Date().toISOString().slice(0, 10); loadDashboard(); loadHistory(historyPage); } catch (error) { showToast(error.message, true); } });
 $('#procurement-product').addEventListener('change', updateProcurementUnits);
@@ -335,8 +401,50 @@ $('#history-reset').addEventListener('click', () => { $('#history-filters').rese
 $('#history-prev').addEventListener('click', () => { if (historyPage > 1) loadHistory(historyPage - 1); });
 $('#history-next').addEventListener('click', () => { if (historyPage < historyPages) loadHistory(historyPage + 1); });
 $('#compare-form').addEventListener('submit', event => { event.preventDefault(); compareHistory(); });
+$('#alert-new').addEventListener('click', resetAlertForm);
+$('#alert-cancel').addEventListener('click', resetAlertForm);
+$('#alert-list').addEventListener('click', async event => {
+  const button = event.target.closest('button[data-alert-action]');
+  if (!button) return;
+  const id = Number(button.dataset.alertId);
+  const rule = alertRules.find(item => item.id === id);
+  if (!rule) return;
+  try {
+    if (button.dataset.alertAction === 'edit') return editAlert(id);
+    if (button.dataset.alertAction === 'mute') {
+      await mutateAlert(id, { muted: !rule.muted });
+      await loadAlerts();
+      showToast(rule.muted ? 'Alerte réactivée.' : 'Alerte mise en pause.');
+    }
+    if (button.dataset.alertAction === 'delete') {
+      if (!window.confirm(`Supprimer la règle ${rule.product} ${rule.direction} ${rule.threshold} ?`)) return;
+      const response = await protectedFetch(`/api/alerts/${id}`, { method: 'DELETE' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Impossible de supprimer cette alerte.');
+      if (editingAlertId === id) resetAlertForm();
+      await loadAlerts();
+      showToast('Alerte supprimée.');
+    }
+  } catch (error) { showToast(error.message, true); }
+});
+$('#alert-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const wasEditing = Boolean(editingAlertId);
+  const values = Object.fromEntries(new FormData(event.target));
+  values.threshold = Number(values.threshold);
+  values.muted = event.target.muted.checked;
+  try {
+    const url = editingAlertId ? `/api/alerts/${editingAlertId}` : '/api/alerts';
+    const response = await protectedFetch(url, { method: editingAlertId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Impossible d’enregistrer cette alerte.');
+    resetAlertForm();
+    await loadAlerts();
+    showToast(wasEditing ? 'Alerte modifiée.' : 'Alerte créée.');
+  } catch (error) { showToast(error.message, true); }
+});
 $('#bitumen-form').source_date.value = new Date().toISOString().slice(0, 10);
 $('#procurement-form').purchase_date.value = new Date().toISOString().slice(0, 10);
 setDefaultComparePeriods();
 updateProcurementUnits();
-loadDashboard(); loadForecast(); loadLogs(); loadHistory(); loadProcurements();
+loadDashboard(); loadForecast(); loadAlerts(); loadLogs(); loadHistory(); loadProcurements();

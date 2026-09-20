@@ -191,6 +191,31 @@ def test_create_procurement_rejects_invalid_currency_and_exchange_rate(empty_dat
         empty_database.create_procurement(payload)
 
 
+def test_alert_rule_crud_and_transition_status(empty_database):
+    rule = empty_database.create_alert_rule(
+        {"product": "brent", "direction": "above", "threshold": 90, "channel": "email"}
+    )
+
+    assert rule["status"] == "normal"
+    assert rule["channel"] == "email"
+
+    from price_monitor.services.alerts import AlertManager
+
+    manager = AlertManager(empty_database)
+    manager.evaluate_prices([{"product": "brent", "price": 91}])
+    assert empty_database.alert_rules()[0]["status"] == "active"
+
+    manager.evaluate_prices([{"product": "brent", "price": 80}])
+    assert empty_database.alert_rules()[0]["status"] == "recovered"
+
+    updated = empty_database.update_alert_rule(rule["id"], {"threshold": 95, "muted": True})
+    assert updated["threshold"] == 95.0
+    assert updated["status"] == "muted"
+
+    empty_database.delete_alert_rule(rule["id"])
+    assert empty_database.alert_rules() == []
+
+
 def test_history_supports_filters_and_pagination(empty_database):
     rows = [
         ("gasoil", 2.0, "2026-09-01", "Alpha", "EIA"),

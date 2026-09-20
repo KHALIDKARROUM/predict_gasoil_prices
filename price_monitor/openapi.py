@@ -52,6 +52,17 @@ OPENAPI_SPEC = {
                     "notes": {"type": "string", "maxLength": 500},
                 },
             },
+            "AlertRuleInput": {
+                "type": "object",
+                "required": ["product", "direction", "threshold", "channel"],
+                "properties": {
+                    "product": {"type": "string", "enum": ["gasoil", "brent", "bitume"]},
+                    "direction": {"type": "string", "enum": ["above", "below"]},
+                    "threshold": {"type": "number", "exclusiveMinimum": 0},
+                    "channel": {"type": "string", "enum": ["webhook", "email", "both"]},
+                    "muted": {"type": "boolean", "default": False},
+                },
+            },
             "Error": {"type": "object", "properties": {"error": {"type": "string"}}},
         },
     },
@@ -73,6 +84,14 @@ OPENAPI_SPEC = {
         },
         "/api/forecast": {
             "get": {"tags": ["market"], "summary": "Prévisions gasoil et Brent", "parameters": [{"$ref": "#/components/parameters/HistoryDays"}], "responses": {"200": {"description": "Prévisions à 7, 30 et 90 jours avec intervalles de confiance et métriques de backtest"}, "400": {"description": "Paramètre invalide"}}}
+        },
+        "/api/alerts": {
+            "get": {"tags": ["market"], "summary": "Lister les règles et leur état", "responses": {"200": {"description": "Règles actives, rétablies ou en pause"}}},
+            "post": {"tags": ["market"], "summary": "Créer une règle d'alerte", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "requestBody": {"required": True, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AlertRuleInput"}}}}, "responses": {"201": {"description": "Règle créée"}, "400": {"description": "Règle invalide"}}},
+        },
+        "/api/alerts/{id}": {
+            "put": {"tags": ["market"], "summary": "Modifier une règle d'alerte", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/AlertRuleInput"}}}}, "responses": {"200": {"description": "Règle modifiée"}, "400": {"description": "Règle invalide"}}},
+            "delete": {"tags": ["market"], "summary": "Supprimer une règle d'alerte", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"description": "Règle supprimée"}, "400": {"description": "Règle introuvable"}}},
         },
         "/api/observations": {
             "get": {"tags": ["market"], "summary": "Historique filtré", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [{"$ref": "#/components/parameters/Product"}, {"$ref": "#/components/parameters/Days"}], "responses": {"200": {"description": "Observations"}, "401": {"description": "Authentification requise"}}},

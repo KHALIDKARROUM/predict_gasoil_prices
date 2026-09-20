@@ -145,7 +145,16 @@ class DatabaseBackend(Protocol):
         last_value: float | None,
         updated_at: str,
         last_notified_at: str | None = None,
+        last_status: str | None = None,
     ) -> None: ...
+
+    def alert_rules(self, include_disabled: bool = True) -> list[dict[str, Any]]: ...
+
+    def create_alert_rule(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+    def update_alert_rule(self, rule_id: int, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+    def delete_alert_rule(self, rule_id: int) -> None: ...
 
     def create_procurement(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -917,7 +926,7 @@ class SQLiteDatabase:
     def get_alert_state(self, alert_key: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT alert_key, active, last_value, last_notified_at, updated_at FROM alert_states WHERE alert_key=?",
+                "SELECT alert_key, active, last_value, last_notified_at, updated_at, last_status FROM alert_states WHERE alert_key=?",
                 (alert_key,),
             ).fetchone()
             return dict(row) if row else None
@@ -929,6 +938,7 @@ class SQLiteDatabase:
         last_value: float | None,
         updated_at: str,
         last_notified_at: str | None = None,
+        last_status: str | None = None,
     ) -> None:
         with self._lock, self.connect() as conn:
             notified_value = self._datetime_value(last_notified_at) if last_notified_at else None
@@ -938,17 +948,154 @@ class SQLiteDatabase:
             if existing:
                 conn.execute(
                     """UPDATE alert_states
-                    SET active=?, last_value=?, last_notified_at=COALESCE(?, last_notified_at), updated_at=?
+                    SET active=?, last_value=?, last_notified_at=COALESCE(?, last_notified_at),
+                        updated_at=?, last_status=COALESCE(?, last_status)
                     WHERE alert_key=?""",
-                    (int(active), last_value, notified_value, self._datetime_value(updated_at), alert_key),
+                    (int(active), last_value, notified_value, self._datetime_value(updated_at), last_status, alert_key),
                 )
             else:
                 conn.execute(
                     """INSERT INTO alert_states
-                    (alert_key, active, last_value, last_notified_at, updated_at)
-                    VALUES(?,?,?,?,?)""",
-                    (alert_key, int(active), last_value, notified_value, self._datetime_value(updated_at)),
+                    (alert_key, active, last_value, last_notified_at, updated_at, last_status)
+                    VALUES(?,?,?,?,?,?)""",
+                    (alert_key, int(active), last_value, notified_value, self._datetime_value(updated_at), last_status or "normal"),
                 )
+
+    @staticmethod
+    def _alert_bool(value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "on"}:
+            return True
+        if isinstance(value, str) and value.strip().lower() in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError("Le champ muted doit être booléen.")
+
+    @classmethod
+    def _validate_alert_rule(cls, payload: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
+        current = current or {}
+        product = str(payload.get("product", current.get("product", ""))).strip().lower()
+        if product not in PRODUCTS:
+            raise ValueError("Produit inconnu. Utilisez gasoil, brent ou bitume.")
+        direction = str(payload.get("direction", current.get("direction", ""))).strip().lower()
+        if direction not in {"above", "below"}:
+            raise ValueError("La direction doit être above ou below.")
+        threshold_input = payload.get("threshold", current.get("threshold"))
+        try:
+            threshold = float(threshold_input)
+        except (TypeError, ValueError):
+            raise ValueError("Le seuil doit être numérique.") from None
+        if not math.isfinite(threshold) or threshold <= 0 or threshold > 1_000_000:
+            raise ValueError("Le seuil doit être compris entre 0 et 1 000 000.")
+        channel = str(payload.get("channel", current.get("channel", "webhook"))).strip().lower()
+        if channel not in {"webhook", "email", "both"}:
+            raise ValueError("Le canal doit être webhook, email ou both.")
+        return {
+            "product": product,
+            "direction": direction,
+            "threshold": threshold,
+            "channel": channel,
+            "muted": cls._alert_bool(payload.get("muted", current.get("muted", False))),
+            "enabled": cls._alert_bool(payload.get("enabled", current.get("enabled", True)), True),
+        }
+
+    @staticmethod
+    def _alert_key(product: str, direction: str, threshold: float) -> str:
+        return f"price:{product}:{direction}:{threshold:g}"
+
+    def alert_rules(self, include_disabled: bool = True) -> list[dict[str, Any]]:
+        where = "" if include_disabled else " WHERE r.enabled=1"
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT r.* FROM alert_rules r{where} ORDER BY r.product, CASE r.direction WHEN 'above' THEN 1 ELSE 2 END, r.id"
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for raw in rows:
+                row = dict(raw)
+                key = self._alert_key(row["product"], row["direction"], float(row["threshold"]))
+                state_row = conn.execute(
+                    "SELECT active, last_value, last_notified_at, updated_at, last_status FROM alert_states WHERE alert_key=?",
+                    (key,),
+                ).fetchone()
+                state = dict(state_row) if state_row else {}
+                status = "muted" if bool(row["muted"]) else (
+                    "active" if bool(state.get("active")) else
+                    "recovered" if state.get("last_status") == "recovered" else "normal"
+                )
+                row.update({
+                    "id": int(row["id"]),
+                    "threshold": float(row["threshold"]),
+                    "muted": bool(row["muted"]),
+                    "enabled": bool(row["enabled"]),
+                    "status": status,
+                    "alert_key": key,
+                    "active": bool(state.get("active")),
+                    "last_value": state.get("last_value"),
+                    "last_notified_at": state.get("last_notified_at"),
+                    "last_evaluated_at": state.get("updated_at"),
+                })
+                result.append(row)
+            return result
+
+    def create_alert_rule(self, payload: dict[str, Any]) -> dict[str, Any]:
+        rule = self._validate_alert_rule(payload)
+        now = self._datetime_value(datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+        with self._lock, self.connect() as conn:
+            duplicate = conn.execute(
+                "SELECT id FROM alert_rules WHERE product=? AND direction=?",
+                (rule["product"], rule["direction"]),
+            ).fetchone()
+            if duplicate:
+                raise ValueError("Une règle existe déjà pour ce produit et cette direction.")
+            cursor = conn.execute(
+                """INSERT INTO alert_rules
+                (product, direction, threshold, channel, muted, enabled, created_at, updated_at)
+                VALUES(?,?,?,?,?,?,?,?)""",
+                (rule["product"], rule["direction"], rule["threshold"], rule["channel"], int(rule["muted"]), int(rule["enabled"]), now, now),
+            )
+            rule_id = getattr(cursor, "lastrowid", None)
+            if not rule_id:
+                rule_id = conn.execute("SELECT MAX(id) FROM alert_rules").fetchone()[0]
+        return next(item for item in self.alert_rules() if item["id"] == int(rule_id))
+
+    def update_alert_rule(self, rule_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            rule_id = int(rule_id)
+        except (TypeError, ValueError):
+            raise ValueError("Identifiant de règle invalide.") from None
+        now = self._datetime_value(datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+        with self._lock, self.connect() as conn:
+            existing_row = conn.execute("SELECT * FROM alert_rules WHERE id=?", (rule_id,)).fetchone()
+            if not existing_row:
+                raise ValueError("Règle introuvable.")
+            existing = dict(existing_row)
+            rule = self._validate_alert_rule(payload, existing)
+            duplicate = conn.execute(
+                "SELECT id FROM alert_rules WHERE product=? AND direction=? AND id<>?",
+                (rule["product"], rule["direction"], rule_id),
+            ).fetchone()
+            if duplicate:
+                raise ValueError("Une règle existe déjà pour ce produit et cette direction.")
+            conn.execute(
+                """UPDATE alert_rules SET product=?, direction=?, threshold=?, channel=?, muted=?, enabled=?, updated_at=?
+                WHERE id=?""",
+                (rule["product"], rule["direction"], rule["threshold"], rule["channel"], int(rule["muted"]), int(rule["enabled"]), now, rule_id),
+            )
+        return next(item for item in self.alert_rules() if item["id"] == rule_id)
+
+    def delete_alert_rule(self, rule_id: int) -> None:
+        try:
+            rule_id = int(rule_id)
+        except (TypeError, ValueError):
+            raise ValueError("Identifiant de règle invalide.") from None
+        with self._lock, self.connect() as conn:
+            deleted = conn.execute("DELETE FROM alert_rules WHERE id=?", (rule_id,)).rowcount
+            if not deleted:
+                raise ValueError("Règle introuvable.")
 
 
 def _get_mysql_connector() -> Any:

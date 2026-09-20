@@ -21,6 +21,7 @@
       <nav aria-label="Sections du tableau de bord">
         <a class="nav-item active" href="#overview"><span>◈</span> Vue d'ensemble</a>
         <a class="nav-item" href="#forecast"><span>⌁</span> Prévisions</a>
+        <a class="nav-item" href="#alerts"><span>!</span> Alertes</a>
         <a class="nav-item" href="#history-page"><span>◷</span> Historique</a>
         <a class="nav-item" href="#manual"><span>＋</span> Saisie bitume</a>
         <a class="nav-item" href="#procurement"><span>▣</span> Achats</a>
@@ -72,6 +73,23 @@
           <article class="forecast-card"><div class="forecast-card-heading"><h3>Pétrole Brent</h3><span class="forecast-unit">USD/baril</span></div><div class="chart-wrap forecast-chart-wrap"><canvas id="forecast-brent-chart"></canvas></div><div class="forecast-stats" id="forecast-brent-stats"><span>Chargement…</span></div></article>
         </div>
         <p class="forecast-disclaimer">Les bandes représentent un intervalle de confiance à 95 % estimé à partir des erreurs historiques. Elles ne constituent pas une garantie de prix.</p>
+      </section>
+
+      <section class="panel alerts-panel" id="alerts">
+        <div class="panel-heading"><div><p class="eyebrow">SURVEILLANCE</p><h2>Alertes de prix</h2></div><button class="text-btn" type="button" id="alert-new">＋ Nouvelle règle</button></div>
+        <p class="chart-note" id="alert-channel-status">Chargement de la configuration des notifications…</p>
+        <div class="alerts-layout">
+          <form id="alert-form" class="alert-form">
+            <div class="alert-form-heading"><strong id="alert-form-title">Créer une règle</strong><button class="text-btn" type="button" id="alert-cancel" hidden>Annuler</button></div>
+            <label>Produit<select name="product"><option value="gasoil">Gasoil / diesel</option><option value="brent">Pétrole Brent</option><option value="bitume">Bitume</option></select></label>
+            <label>Condition<select name="direction"><option value="above">Prix au-dessus de</option><option value="below">Prix en-dessous de</option></select></label>
+            <label>Seuil<input type="number" name="threshold" min="0.000001" step="0.0001" required placeholder="90"></label>
+            <label>Notification<select name="channel"><option value="webhook">Webhook</option><option value="email">Email</option><option value="both">Webhook + email</option></select></label>
+            <label class="alert-muted-field"><input type="checkbox" name="muted"> Mettre en pause les notifications</label>
+            <button class="primary-btn full" type="submit" id="alert-save">Créer l'alerte <span>→</span></button>
+          </form>
+          <div class="alert-list" id="alert-list"><div class="empty">Chargement des alertes…</div></div>
+        </div>
       </section>
 
       <section class="panel latest-panel" id="history">

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import json
 import threading
 from http.server import ThreadingHTTPServer
 
@@ -12,6 +13,7 @@ from price_monitor import app as app_module
 class StubDatabase:
     def __init__(self) -> None:
         self.observation_calls = 0
+        self.alerts = []
 
     def observations(self, product=None, days=30, limit=600):
         self.observation_calls += 1
@@ -20,6 +22,21 @@ class StubDatabase:
     def insert_observation(self, payload):
         self.observation_calls += 1
         return payload
+
+    def alert_rules(self):
+        return self.alerts
+
+    def create_alert_rule(self, payload):
+        alert = {"id": 1, **payload, "status": "normal"}
+        self.alerts = [alert]
+        return alert
+
+    def update_alert_rule(self, rule_id, payload):
+        self.alerts[0].update(payload)
+        return self.alerts[0]
+
+    def delete_alert_rule(self, rule_id):
+        self.alerts = []
 
 
 @pytest.fixture
@@ -88,6 +105,23 @@ def test_forecast_route_returns_public_market_forecast(api_server):
     assert status == 200
     assert database.observation_calls == 2
     assert body and b'"products"' in body
+
+
+def test_alert_crud_requires_key_for_writes_and_supports_edit_and_delete(api_server):
+    server, _ = api_server
+    body = json.dumps({"product": "brent", "direction": "above", "threshold": 90, "channel": "webhook"})
+    headers = {"X-API-Key": "test-api-key", "Content-Type": "application/json", "Content-Length": str(len(body))}
+
+    status, _, _ = request(server, "POST", "/api/alerts", body=body)
+    assert status == 401
+
+    status, _, _ = request(server, "POST", "/api/alerts", headers=headers, body=body)
+    assert status == 201
+    status, _, body = request(server, "PUT", "/api/alerts/1", headers={**headers, "Content-Length": str(len('{"muted": true}'))}, body='{"muted": true}')
+    assert status == 200
+    assert b'"muted": true' in body
+    status, _, _ = request(server, "DELETE", "/api/alerts/1", headers={"X-API-Key": "test-api-key"})
+    assert status == 200
 
 
 def test_rate_limiter_returns_retry_after_for_production_requests(api_server, monkeypatch):

@@ -51,6 +51,7 @@ class AlertEvent:
     source_code: str | None = None
     value: float | None = None
     threshold: float | None = None
+    channel: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -96,8 +97,24 @@ class NotificationDispatcher:
             return False
 
         delivered = False
+        grouped: dict[str, list[AlertEvent]] = {}
+        for event in events:
+            channel = event.channel or "both"
+            if channel == "none":
+                continue
+            grouped.setdefault(channel, []).append(event)
+        for channel, batch in grouped.items():
+            delivered = self._send_batch(batch, channel) or delivered
+        return delivered
+
+    def _send_batch(self, events: list[AlertEvent], channel: str) -> bool:
+        """Send one rule-specific batch to its selected channel(s)."""
+        if not events:
+            return False
+
         text = "\n".join(f"• {event.title}: {event.message}" for event in events)
-        if self.webhook_url:
+        delivered = False
+        if channel in {"webhook", "both"} and self.webhook_url:
             try:
                 payload = {
                     "title": "Price Monitor - alerte prix",
@@ -119,7 +136,7 @@ class NotificationDispatcher:
                 metrics.increment("price_monitor_alert_notifications_total", labels={"channel": "webhook", "status": "error"})
                 logger.error("Alert webhook delivery failed", extra={"event": "alert_notification_failed", "channel": "webhook", "error": str(exc)})
 
-        if self.email_to and self.smtp_host:
+        if channel in {"email", "both"} and self.email_to and self.smtp_host:
             try:
                 message = EmailMessage()
                 message["Subject"] = f"Price Monitor - {len(events)} alerte(s)"
@@ -153,8 +170,27 @@ class AlertManager:
     ) -> None:
         self.database = database
         self.notifier = notifier or NotificationDispatcher()
-        self.thresholds = thresholds if thresholds is not None else ALERT_THRESHOLDS
+        stored_rules = []
+        if thresholds is None:
+            list_rules = getattr(database, "alert_rules", None)
+            if callable(list_rules):
+                stored_rules = list_rules(include_disabled=False)
+        self.thresholds = thresholds if thresholds is not None else (self._thresholds_from_rules(stored_rules) or ALERT_THRESHOLDS)
         self.now = now or (lambda: datetime.now(timezone.utc))
+
+    @staticmethod
+    def _thresholds_from_rules(rules: list[dict[str, Any]]) -> dict[str, dict[str, dict[str, Any]]]:
+        thresholds: dict[str, dict[str, dict[str, Any]]] = {}
+        for rule in rules:
+            product = str(rule.get("product", ""))
+            direction = str(rule.get("direction", ""))
+            if product not in PRODUCTS or direction not in {"above", "below"}:
+                continue
+            thresholds.setdefault(product, {})[direction] = {
+                "threshold": rule.get("threshold"),
+                "channel": "none" if rule.get("muted") else rule.get("channel", "webhook"),
+            }
+        return thresholds
 
     def evaluate_collection(
         self,
@@ -184,7 +220,8 @@ class AlertManager:
                 continue
             if not isfinite(price):
                 continue
-            for direction, threshold in self._rules_for(product).items():
+            for direction, rule in self._rules_for(product).items():
+                threshold = rule["threshold"]
                 active = price >= threshold if direction == "above" else price <= threshold
                 key = f"price:{product}:{direction}:{threshold:g}"
                 event = self._transition(
@@ -207,6 +244,7 @@ class AlertManager:
                         product=product,
                         value=price,
                         threshold=threshold,
+                        channel=rule.get("channel"),
                     ),
                 )
                 if event:
@@ -295,18 +333,25 @@ class AlertManager:
             self._dispatch(events)
         return events
 
-    def _rules_for(self, product: str) -> dict[str, float]:
+    def _rules_for(self, product: str) -> dict[str, dict[str, Any]]:
         rules = self.thresholds.get(product, {})
-        normalized: dict[str, float] = {}
+        normalized: dict[str, dict[str, Any]] = {}
         for direction in ("above", "below"):
             if direction not in rules:
                 continue
+            raw_rule = rules[direction]
+            if isinstance(raw_rule, dict):
+                raw_threshold = raw_rule.get("threshold")
+                channel = raw_rule.get("channel", "webhook")
+            else:
+                raw_threshold = raw_rule
+                channel = None
             try:
-                value = float(rules[direction])
+                value = float(raw_threshold)
             except (TypeError, ValueError):
                 continue
             if isfinite(value):
-                normalized[direction] = value
+                normalized[direction] = {"threshold": value, "channel": channel}
         return normalized
 
     def _transition(
@@ -319,7 +364,14 @@ class AlertManager:
     ) -> AlertEvent | None:
         previous = self.database.get_alert_state(key)
         was_active = bool(previous and previous.get("active"))
-        self.database.set_alert_state(key, active, value, occurred_at)
+        transition_status = "triggered" if active else "recovered"
+        self.database.set_alert_state(
+            key,
+            active,
+            value,
+            occurred_at,
+            last_status=transition_status if active != was_active else None,
+        )
         if active == was_active:
             return None
         return event_factory("triggered" if active else "recovered")
@@ -327,7 +379,7 @@ class AlertManager:
     def _dispatch(self, events: list[AlertEvent]) -> None:
         dispatchable = [
             event for event in events
-            if event.status == "triggered" or ALERT_NOTIFY_RECOVERY
+            if event.channel != "none" and (event.status == "triggered" or ALERT_NOTIFY_RECOVERY)
         ]
         if not dispatchable:
             return

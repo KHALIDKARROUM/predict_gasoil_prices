@@ -52,3 +52,5 @@ Les notifications sont optionnelles et ne bloquent jamais une collecte. Configur
 - `PRICE_MONITOR_ALERT_EMAIL_TO` et les paramètres `PRICE_MONITOR_ALERT_SMTP_*` : livraison par email.
 
 Le système conserve l'état des alertes dans `alert_states`. Il notifie les franchissements, les rétablissements, les échecs de source et les sources devenues obsolètes, sans répéter une alerte tant que la condition reste inchangée.
+
+Les règles créées dans la section « Alertes de prix » du tableau de bord sont stockées dans `alert_rules`. Le canal choisi par règle limite la livraison au webhook, à l'email ou aux deux. Une règle en pause continue d'être évaluée afin que son état reste visible, mais aucune notification ne lui est envoyée. Les règles enregistrées dans la base prennent le relais de la configuration JSON d'environnement ; celle-ci reste disponible comme secours pour une première installation.

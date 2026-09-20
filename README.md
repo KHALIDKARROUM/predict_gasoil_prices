@@ -80,6 +80,9 @@ Sans clé configurée, `/api/collect` et `/api/observations` répondent avec une
 |---|---|---|
 | GET | `/api/dashboard?days=30` | indicateurs, séries et derniers relevés |
 | GET | `/api/forecast?history_days=1825` | prévisions gasoil et Brent à 7, 30 et 90 jours, bandes de confiance et backtest |
+| GET | `/api/alerts` | règles d'alerte et états courants |
+| POST | `/api/alerts` | créer une règle (clé API) |
+| PUT / DELETE | `/api/alerts/{id}` | modifier, mettre en pause ou supprimer une règle (clé API) |
 | GET | `/api/observations?product=bitume` | historique filtré (clé API) |
 | GET | `/api/history?page=1&page_size=50&product=bitume&supplier=ABC&source=devis&date_from=2026-01-01&date_to=2026-09-15&min_price=400&max_price=700` | historique paginé et filtré (clé API) |
 | GET | `/api/history/compare?period_a_from=2026-01-01&period_a_to=2026-03-31&period_b_from=2026-04-01&period_b_to=2026-06-30` | comparaison de deux périodes (clé API) |
@@ -91,7 +94,9 @@ En production, une limitation en mémoire s'applique par adresse cliente : 60 re
 
 ## Alertes de prix et de disponibilité
 
-Les alertes sont désactivées par défaut. Pour surveiller les seuils, définissez `PRICE_MONITOR_ALERT_THRESHOLDS` avec un objet JSON :
+Les règles d'alerte peuvent être créées, modifiées, mises en pause ou supprimées depuis la section « Alertes de prix » du tableau de bord. Chaque règle associe un produit, une direction (`above` ou `below`), un seuil et un canal (`webhook`, `email` ou `both`). L'interface affiche les règles actives, rétablies, surveillées et en pause.
+
+Les règles configurées dans l'interface sont persistées dans `alert_rules`. Pour conserver la compatibilité avec les installations existantes, `PRICE_MONITOR_ALERT_THRESHOLDS` reste utilisé comme configuration de secours tant qu'aucune règle enregistrée n'existe :
 
 ```text
 PRICE_MONITOR_ALERT_THRESHOLDS={"brent":{"above":90,"below":70},"gasoil":{"above":3.5},"bitume":{"above":600}}

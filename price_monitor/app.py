@@ -14,6 +14,9 @@ from urllib.parse import parse_qs, urlparse
 
 from .config import (
     API_KEY,
+    ALERT_EMAIL_TO,
+    ALERT_SMTP_HOST,
+    ALERT_WEBHOOK_URL,
     ENVIRONMENT,
     HOST,
     PORT,
@@ -26,6 +29,7 @@ from .observability import logger, metrics
 from .openapi import OPENAPI_SPEC
 from .services.export import csv_bytes, xlsx_bytes
 from .services.forecasting import build_forecast
+from .services.alerts import AlertManager
 from .services.scheduler import CollectionScheduler, run_collection
 
 
@@ -98,6 +102,27 @@ def history_filters(query: dict[str, list[str]]) -> dict[str, object]:
         "min_price": query.get("min_price", [None])[0] or None,
         "max_price": query.get("max_price", [None])[0] or None,
     }
+
+
+def alert_channel_status() -> dict[str, bool]:
+    webhook = bool(ALERT_WEBHOOK_URL)
+    email = bool(ALERT_EMAIL_TO and ALERT_SMTP_HOST)
+    return {"webhook": webhook, "email": email, "both": webhook and email}
+
+
+def alert_rule_id(path: str) -> int | None:
+    parts = path.strip("/").split("/")
+    if len(parts) != 3 or parts[:2] != ["api", "alerts"] or not parts[2].isdigit():
+        return None
+    return int(parts[2])
+
+
+def refresh_alert_states() -> None:
+    """Evaluate the newly saved rules against the latest known observations."""
+    latest = getattr(database, "latest", None)
+    if not callable(latest):
+        return
+    AlertManager(database).evaluate_prices(latest())
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -240,6 +265,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/forecast":
                 history_days = max(90, min(1825, int(query.get("history_days", [1825])[0])))
                 return self.send_json(build_forecast(database, history_days=history_days))
+            if parsed.path == "/api/alerts":
+                return self.send_json({"alerts": database.alert_rules(), "channels": alert_channel_status()})
             if parsed.path == "/api/observations":
                 if not self._protect_api():
                     return
@@ -294,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path.startswith("/api/") and not self._rate_limit():
                 return
-            if parsed.path in {"/api/collect", "/api/observations", "/api/procurements"} and not self._protect_api():
+            if parsed.path in {"/api/collect", "/api/observations", "/api/procurements", "/api/alerts"} and not self._protect_api():
                 return
             length = int(self.headers.get("Content-Length", 0))
             payload = json.loads(self.rfile.read(length) or b"{}")
@@ -306,11 +333,51 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/procurements":
                 record = database.create_procurement(payload)
                 return self.send_json({"status": "success", "purchase": record}, 201)
+            if parsed.path == "/api/alerts":
+                record = database.create_alert_rule(payload)
+                refresh_alert_states()
+                return self.send_json({"status": "success", "alert": record}, 201)
             return self.send_json({"error": "Route introuvable"}, 404)
         except ValueError as exc:
             return self.send_json({"error": str(exc)}, 400)
         except Exception as exc:
             logger.exception("POST request failed", extra={"event": "http_handler_error", "path": parsed.path})
+            return self.send_json({"error": str(exc)}, 500)
+
+    def do_PUT(self) -> None:
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path.startswith("/api/") and not self._rate_limit():
+                return
+            if alert_rule_id(parsed.path) is None or not self._protect_api():
+                return self.send_json({"error": "Route introuvable"}, 404) if alert_rule_id(parsed.path) is None else None
+            length = int(self.headers.get("Content-Length", 0))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            record = database.update_alert_rule(alert_rule_id(parsed.path), payload)
+            refresh_alert_states()
+            return self.send_json({"status": "success", "alert": record})
+        except ValueError as exc:
+            return self.send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            logger.exception("PUT request failed", extra={"event": "http_handler_error", "path": parsed.path})
+            return self.send_json({"error": str(exc)}, 500)
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path.startswith("/api/") and not self._rate_limit():
+                return
+            rule_id = alert_rule_id(parsed.path)
+            if rule_id is None:
+                return self.send_json({"error": "Route introuvable"}, 404)
+            if not self._protect_api():
+                return
+            database.delete_alert_rule(rule_id)
+            return self.send_json({"status": "success", "deleted": rule_id})
+        except ValueError as exc:
+            return self.send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            logger.exception("DELETE request failed", extra={"event": "http_handler_error", "path": parsed.path})
             return self.send_json({"error": str(exc)}, 500)
 
     def serve_file(self, path: Path, content_type: str) -> None:
