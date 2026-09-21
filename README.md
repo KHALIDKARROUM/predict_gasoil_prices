@@ -70,8 +70,7 @@ Il n'existe pas de prix spot mondial gratuit et exécutable du bitume dans une A
 
 Deux notebooks sont fournis :
 
-- `notebooks/market_price_eda.ipynb` pour l'analyse descriptive des prix, rendements, volatilité, corrélation, saisonnalité et chocs ;
-- `notebooks/data_science_workflow.ipynb` pour l'audit des données, les variables historiques, la validation chronologique, la comparaison des modèles et l'analyse du holdout final.
+- `notebooks/data_science_workflow.ipynb` regroupe le workflow complet : définition du problème, collecte, compréhension et nettoyage des données, EDA, feature engineering, préparation chronologique, sélection, entraînement, évaluation et tuning des modèles.
 
 Le pipeline complet peut aussi être relancé sans interface :
 
