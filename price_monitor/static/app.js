@@ -439,9 +439,33 @@ document.querySelectorAll('.mode-btn').forEach(button => button.addEventListener
   loadDashboard();
 }));
 
-document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('click', () => {
-  document.querySelectorAll('.nav-item').forEach(navItem => navItem.classList.toggle('active', navItem === item));
+const navigation = $('.sidebar');
+const navigationToggle = $('#nav-toggle');
+const navigationItems = [...document.querySelectorAll('.nav-item')];
+
+function setNavigationOpen(open) {
+  navigation.classList.toggle('nav-open', open);
+  navigationToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  navigationToggle.querySelector('.sr-only').textContent = open ? 'Fermer la navigation' : 'Ouvrir la navigation';
+}
+
+navigationToggle.addEventListener('click', () => setNavigationOpen(!navigation.classList.contains('nav-open')));
+navigationItems.forEach(item => item.addEventListener('click', () => {
+  navigationItems.forEach(navItem => navItem.classList.toggle('active', navItem === item));
+  setNavigationOpen(false);
 }));
+
+const observedSections = navigationItems
+  .map(item => document.querySelector(item.getAttribute('href')))
+  .filter(Boolean);
+if ('IntersectionObserver' in window) {
+  const navigationObserver = new IntersectionObserver(entries => {
+    const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+    if (!visible) return;
+    navigationItems.forEach(item => item.classList.toggle('active', item.getAttribute('href') === `#${visible.target.id}`));
+  }, { rootMargin: '-20% 0px -65% 0px', threshold: [0.05, 0.25, 0.5] });
+  observedSections.forEach(section => navigationObserver.observe(section));
+}
 
 $('#period-select').addEventListener('change', loadDashboard);
 $('#forecast-horizon').addEventListener('change', renderForecast);

@@ -15,10 +15,11 @@
 <body>
   <a class="skip-link" href="#main-content">Aller au contenu principal</a>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="Navigation principale">
-      <div class="brand"><span class="brand-mark">↗</span><span>Price<br><strong>Monitor</strong></span></div>
+    <header class="sidebar" aria-label="Navigation principale">
+      <a class="brand" href="#overview" aria-label="Price Monitor · Retour à la vue d'ensemble"><span class="brand-mark">↗</span><span>Price <strong>Monitor</strong></span></a>
       <div class="side-caption">CENTRE DE PILOTAGE</div>
-      <nav aria-label="Sections du tableau de bord">
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-navigation"><span></span><span></span><span></span><span class="sr-only">Ouvrir la navigation</span></button>
+      <nav id="primary-navigation" aria-label="Sections du tableau de bord">
         <a class="nav-item active" href="#overview"><span>◈</span> Vue d'ensemble</a>
         <a class="nav-item" href="#forecast"><span>⌁</span> Prévisions</a>
         <a class="nav-item" href="#alerts"><span>!</span> Alertes</a>
@@ -32,11 +33,11 @@
         <div class="secure-dot"></div>
         <div><small>ENVIRONNEMENT</small><br><span id="mode-label">Démonstration</span></div>
       </div>
-    </aside>
+    </header>
 
     <main class="content" id="main-content">
       <header class="topbar">
-        <div><p class="eyebrow">MONITORING / MARCHÉS INTERNATIONAUX</p><h1>Suivi des prix</h1></div>
+        <div><p class="eyebrow">MONITORING / MARCHÉS INTERNATIONAUX</p><h1>Suivi des prix</h1><p class="topbar-intro">Pilotez vos benchmarks, prévisions et décisions d'achat depuis une vue unique.</p></div>
         <div class="top-actions"><span class="live-pill" id="system-status" role="status"><i></i> Système opérationnel</span><button class="icon-button" id="refresh-btn" title="Actualiser les données" aria-label="Actualiser les données">↻</button><div class="avatar" aria-label="Profil KK">KK</div></div>
       </header>
 
