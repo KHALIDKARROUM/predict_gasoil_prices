@@ -465,8 +465,6 @@ const pageAliases = {
   procurement: 'budget', sources: 'activite'
 };
 let activePage = null;
-let navigationVersion = 0;
-let pageAnimations = [];
 
 function setNavigationOpen(open) {
   navigation.classList.toggle('nav-open', open);
@@ -481,29 +479,7 @@ function resolvePage(hash) {
   return Object.hasOwn(pageAliases, key) ? pageAliases[key] : 'marches';
 }
 
-async function showPage({ animate = true, focus = true } = {}) {
-  const key = resolvePage(window.location.hash);
-  const next = document.getElementById(key);
-  const version = ++navigationVersion;
-  pageAnimations.forEach(animation => animation.cancel());
-  pageAnimations = [];
-  setNavigationOpen(false);
-  if (window.location.hash !== `#${key}`) window.history.replaceState(null, '', `#${key}`);
-  const moving = animate && !reducedMotion.matches && typeof next.animate === 'function';
-  if (activePage && activePage !== next && moving) {
-    const exit = activePage.animate(
-      [{ opacity: 1, transform: 'translateY(0)' }, { opacity: 0, transform: 'translateY(-6px)' }],
-      { duration: 110, easing: 'ease-out', fill: 'forwards' }
-    );
-    pageAnimations.push(exit);
-    await exit.finished.catch(() => {});
-    if (version !== navigationVersion) return;
-  }
-  pageAnimations.forEach(animation => animation.cancel());
-  pageAnimations = [];
-  pageViews.forEach(page => { page.hidden = page !== next; });
-  const changed = activePage !== next;
-  activePage = next;
+function updatePageChrome(key) {
   const [title, description] = pageDetails[key];
   $('#page-title').textContent = title;
   $('#page-description').textContent = description;
@@ -514,18 +490,28 @@ async function showPage({ animate = true, focus = true } = {}) {
     if (selected) item.setAttribute('aria-current', 'page');
     else item.removeAttribute('aria-current');
   });
-  if (focus) {
-    window.scrollTo({ top: 0, behavior: 'instant' });
-    $('#page-title').focus({ preventScroll: true });
+}
+
+function showPage({ animate = true, focus = true, scroll = true } = {}) {
+  const key = resolvePage(window.location.hash);
+  const next = document.getElementById(key);
+  setNavigationOpen(false);
+  if (window.location.hash !== `#${key}`) window.history.replaceState(null, '', `#${key}`);
+  const changed = activePage !== next;
+  pageViews.forEach(page => { page.hidden = false; });
+  activePage = next;
+  updatePageChrome(key);
+  if (scroll && changed) {
+    next.scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
+    if (focus) $('#page-title').focus({ preventScroll: true });
   }
-  // Charts created in hidden views need their visible container dimensions.
   if (key === 'marches') chart?.resize();
   if (key === 'tendances') Object.values(forecastCharts).forEach(instance => instance.resize());
-  if (changed && moving && !reducedMotion.matches) {
-    pageAnimations.push(next.animate(
-      [{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'translateY(0)' }],
-      { duration: 280, easing: 'cubic-bezier(.22, 1, .36, 1)' }
-    ));
+  if (changed && animate && !reducedMotion.matches && typeof next.animate === 'function') {
+    next.animate(
+      [{ opacity: .72, transform: 'translateY(10px)' }, { opacity: 1, transform: 'translateY(0)' }],
+      { duration: 260, easing: 'cubic-bezier(.22, 1, .36, 1)' }
+    );
   }
 }
 
@@ -552,12 +538,22 @@ document.addEventListener('click', event => {
 window.addEventListener('hashchange', () => {
   if (window.location.hash !== '#main-content') showPage();
 });
-reducedMotion.addEventListener('change', () => {
-  if (reducedMotion.matches) pageAnimations.forEach(animation => animation.finish());
-});
+if ('IntersectionObserver' in window) {
+  const pageObserver = new IntersectionObserver(entries => {
+    const visible = entries.filter(entry => entry.isIntersecting)
+      .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+    if (!visible) return;
+    const key = visible.target.dataset.page;
+    if (!Object.hasOwn(pageDetails, key) || activePage === visible.target) return;
+    activePage = visible.target;
+    updatePageChrome(key);
+    window.history.replaceState(null, '', `#${key}`);
+  }, { rootMargin: '-18% 0px -62% 0px', threshold: [0.05, 0.2, 0.5] });
+  pageViews.forEach(page => pageObserver.observe(page));
+}
 document.documentElement.classList.add('pages-ready');
 setNavigationOpen(false);
-showPage({ animate: false, focus: false });
+showPage({ animate: false, focus: false, scroll: false });
 
 $('#period-select').addEventListener('change', loadDashboard);
 $('#forecast-horizon').addEventListener('change', renderForecast);
