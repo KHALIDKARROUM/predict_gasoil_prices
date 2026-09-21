@@ -447,10 +447,12 @@ class SQLiteDatabase:
             self._seed_sources(conn)
             self._seed_supplier_channels(conn)
             count = conn.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0]
-            if count == 0:
-                imported = self._seed_real_data(conn)
-                if imported == 0 and DEMO_MODE:
-                    self._seed_demo(conn)
+            # Keep an existing installation synchronized with the reproducible
+            # FRED/EIA snapshot. The import is idempotent, so refreshing the
+            # bundled CSV adds missing market dates without duplicating rows.
+            imported = self._seed_real_data(conn)
+            if count == 0 and imported == 0 and DEMO_MODE:
+                self._seed_demo(conn)
 
     def healthcheck(self) -> dict[str, str]:
         """Verify that the configured database accepts a simple read."""
@@ -481,9 +483,24 @@ class SQLiteDatabase:
         )
 
     def _seed_real_data(self, conn: Any) -> int:
-        """Load the reproducible FRED/EIA snapshot bundled with the project."""
+        """Synchronize the reproducible FRED/EIA snapshot bundled with the project."""
         if not REAL_DATA_PATH.exists():
             return 0
+        existing_rows = conn.execute(
+            """SELECT product, source, source_date, price
+            FROM price_observations
+            WHERE source IN (?,?)""",
+            ("EIA/FRED - DDFUELNYH", "EIA/FRED - DCOILBRENTEU"),
+        ).fetchall()
+        existing = {
+            (
+                str(row["product"]),
+                str(row["source"]),
+                str(row["source_date"])[:10],
+                float(row["price"]),
+            )
+            for row in existing_rows
+        }
         previous: dict[str, float] = {}
         imported = 0
         with REAL_DATA_PATH.open("r", encoding="utf-8", newline="") as handle:
@@ -502,6 +519,10 @@ class SQLiteDatabase:
                     prior = previous.get(product)
                     variation = round(price - prior, 6) if prior is not None else None
                     variation_pct = round((variation / prior) * 100, 4) if prior else None
+                    identity = (product, source, source_date, price)
+                    if identity in existing:
+                        previous[product] = price
+                        continue
                     conn.execute(
                         """INSERT INTO price_observations
                         (product, price, unit, currency, source, source_date, collected_at,
@@ -511,6 +532,7 @@ class SQLiteDatabase:
                          self._datetime_value(f"{source_date}T12:00:00+00:00"), variation, variation_pct, 0,
                          "Historique réel EIA importé depuis FRED; horodatage de collecte approximé pour le backfill."),
                     )
+                    existing.add(identity)
                     previous[product] = price
                     imported += 1
         return imported
@@ -1054,9 +1076,11 @@ class SQLiteDatabase:
             return [dict(r) for r in rows]
 
     def observations(self, product: str | None = None, days: int = 30, limit: int = 600) -> list[dict[str, Any]]:
-        clauses = ["collected_at >= ?"]
+        # A price belongs on the chart when it was published by the market
+        # source, not when this application happened to collect it.
+        clauses = ["source_date >= ?"]
         params: list[Any] = [
-            self._datetime_value((datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
+            (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
         ]
         if product in PRODUCTS:
             clauses.append("product = ?")
@@ -1064,7 +1088,9 @@ class SQLiteDatabase:
         params.append(limit)
         with self.connect() as conn:
             rows = conn.execute(
-                f"SELECT * FROM price_observations WHERE {' AND '.join(clauses)} ORDER BY collected_at ASC LIMIT ?",
+                f"""SELECT * FROM price_observations
+                WHERE {' AND '.join(clauses)}
+                ORDER BY source_date ASC, collected_at ASC LIMIT ?""",
                 params,
             ).fetchall()
             return [dict(r) for r in rows]
@@ -1079,10 +1105,20 @@ class SQLiteDatabase:
         for product, meta in PRODUCTS.items():
             values = [float(r["price"]) for r in by_product.get(product, [])]
             current = next((r for r in latest if r["product"] == product), None)
+            current_source_date = str(current["source_date"])[:10] if current else None
+            age_days = (
+                (datetime.now(timezone.utc).date() - date.fromisoformat(current_source_date)).days
+                if current_source_date
+                else None
+            )
+            freshness_days = 45 if product == "bitume" else 7
             metrics[product] = {
                 "label": meta["label"], "unit": meta["unit"], "color": meta["color"],
                 "current": float(current["price"]) if current else None,
                 "variation": float(current["variation_pct"]) if current and current["variation_pct"] is not None else None,
+                "source_date": current_source_date,
+                "age_days": age_days,
+                "is_stale": age_days is not None and age_days > freshness_days,
                 "min": min(values) if values else None,
                 "max": max(values) if values else None,
                 "average": round(sum(values) / len(values), 4) if values else None,
@@ -1444,10 +1480,9 @@ class MySQLDatabase(SQLiteDatabase):
             self._seed_sources(connection)
             self._seed_supplier_channels(connection)
             count = connection.execute("SELECT COUNT(*) AS count FROM price_observations").fetchone()["count"]
-            if count == 0:
-                imported = self._seed_real_data(connection)
-                if imported == 0 and DEMO_MODE:
-                    self._seed_demo(connection)
+            imported = self._seed_real_data(connection)
+            if count == 0 and imported == 0 and DEMO_MODE:
+                self._seed_demo(connection)
 
     def _seed_sources(self, connection: _MySQLConnection) -> None:
         rows = [

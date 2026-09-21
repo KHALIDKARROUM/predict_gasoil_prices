@@ -50,6 +50,8 @@ python scripts/prepare_market_data.py --years 5 --refresh
 
 Pour les collectes quotidiennes en direct, renseigner `FRED_API_KEY` puis conserver `PRICE_MONITOR_DEMO=false`. La clé FRED est gratuite après inscription. L'indice BLS `WPU058` ne demande pas de clé.
 
+Au démarrage, l'application synchronise de façon idempotente l'historique FRED/EIA présent dans `data/processed/market_prices.csv`, y compris pour une base SQLite ou MySQL déjà existante. Le graphique filtre et affiche les séries selon leur date de publication (`source_date`). Une valeur de carte plus ancienne que sept jours pour le gasoil ou le Brent, ou que quarante-cinq jours pour le bitume, est explicitement signalée comme ancienne.
+
 Le projet distingue volontairement trois types de données :
 
 - **gasoil** : `DDFUELNYH`, prix spot FOB New York Harbor en USD/gallon — benchmark de négociation, pas prix rendu à destination ;

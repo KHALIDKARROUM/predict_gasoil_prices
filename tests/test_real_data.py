@@ -42,3 +42,25 @@ def test_bundled_real_snapshot_is_imported_into_empty_database(tmp_path, monkeyp
     assert all("Historique réel EIA importé" in row["notes"] for row in observations)
     assert any(row["variation"] is not None for row in observations)
     assert database.dashboard(days=10_000)["quality"]["observation_count"] == expected_rows
+
+
+def test_bundled_snapshot_syncs_new_dates_into_an_existing_database(tmp_path, monkeypatch):
+    snapshot = tmp_path / "market_prices.csv"
+    snapshot.write_text("date,brent,gasoil\n2026-09-01,80.0,2.4\n", encoding="utf-8")
+    monkeypatch.setattr(database_module, "REAL_DATA_PATH", snapshot)
+    monkeypatch.setattr(database_module, "DEMO_MODE", False)
+    database_path = tmp_path / "sync-data.db"
+
+    first = Database(database_path)
+    assert first.dashboard(days=10_000)["quality"]["observation_count"] == 2
+
+    snapshot.write_text(
+        "date,brent,gasoil\n2026-09-01,80.0,2.4\n2026-09-02,81.0,2.5\n",
+        encoding="utf-8",
+    )
+    second = Database(database_path)
+
+    assert second.dashboard(days=10_000)["quality"]["observation_count"] == 4
+    # Reopening against the same snapshot remains idempotent.
+    third = Database(database_path)
+    assert third.dashboard(days=10_000)["quality"]["observation_count"] == 4

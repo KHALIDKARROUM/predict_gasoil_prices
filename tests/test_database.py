@@ -140,6 +140,40 @@ def test_dashboard_excludes_observations_outside_requested_window(empty_database
     assert dashboard["metrics"]["gasoil"]["average"] == 20.0
 
 
+def test_dashboard_uses_market_source_date_instead_of_collection_time(empty_database):
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    recent_source_date = (now - timedelta(days=1)).date().isoformat()
+    old_collection_time = (now - timedelta(days=120)).isoformat()
+    old_source_date = (now - timedelta(days=120)).date().isoformat()
+
+    empty_database.insert_observation(
+        observation_payload("gasoil", 20.0, recent_source_date, old_collection_time)
+    )
+    empty_database.insert_observation(
+        observation_payload("brent", 100.0, old_source_date, now.isoformat())
+    )
+
+    dashboard = empty_database.dashboard(days=30)
+
+    assert dashboard["metrics"]["gasoil"]["count"] == 1
+    assert dashboard["series"]["gasoil"][0]["source_date"] == recent_source_date
+    assert dashboard["metrics"]["brent"]["count"] == 0
+
+
+def test_dashboard_marks_old_latest_price_as_stale(empty_database):
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    old_source_date = (now - timedelta(days=10)).date().isoformat()
+    empty_database.insert_observation(
+        observation_payload("gasoil", 20.0, old_source_date, now.isoformat())
+    )
+
+    metric = empty_database.dashboard(days=30)["metrics"]["gasoil"]
+
+    assert metric["source_date"] == old_source_date
+    assert metric["age_days"] == 10
+    assert metric["is_stale"] is True
+
+
 def test_create_procurement_calculates_total_budget_variance_and_price_impact(empty_database):
     empty_database.insert_observation(
         observation_payload("gasoil", 2.5, "2026-09-14", "2026-09-14T12:00:00+00:00")

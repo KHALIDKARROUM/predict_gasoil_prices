@@ -54,7 +54,12 @@ function renderMetrics(metrics) {
   $('#metric-grid').innerHTML = Object.entries(PRODUCT_META).map(([key, meta]) => {
     const m = metrics[key] || {}; const cls = m.variation > 0 ? 'up' : m.variation < 0 ? 'down' : 'flat';
     const range = m.min == null ? '—' : `${formatNumber(m.min)}–${formatNumber(m.max)}`;
-    return `<article class="metric-card" style="color:${meta.color}"><div class="metric-head"><span class="metric-label">${meta.label}</span><i class="metric-dot" style="background:${meta.color}"></i></div><div class="metric-price">${formatPrice(m.current, m.unit)}</div><span class="trend ${cls}">${m.variation == null ? '—' : (m.variation >= 0 ? '▲' : '▼') + ' ' + formatPct(m.variation)} <span class="muted">vs précédent</span></span><span class="metric-foot"><span>Moy. ${m.average == null ? '—' : formatNumber(m.average)}</span><span class="range">Min–max ${range}</span><span class="count">${m.count || 0} relevés</span></span></article>`;
+    const freshness = m.current == null
+      ? '<span class="freshness missing">Aucune donnée</span>'
+      : m.is_stale
+        ? `<span class="freshness stale" title="Dernière publication : ${escapeHtml(m.source_date)}">Donnée ancienne · ${m.age_days} j</span>`
+        : `<span class="freshness current">À jour · ${formatDate(m.source_date)}</span>`;
+    return `<article class="metric-card" style="color:${meta.color}"><div class="metric-head"><span class="metric-label">${meta.label}</span>${freshness}<i class="metric-dot" style="background:${meta.color}"></i></div><div class="metric-price">${formatPrice(m.current, m.unit)}</div><span class="trend ${cls}">${m.variation == null ? '—' : (m.variation >= 0 ? '▲' : '▼') + ' ' + formatPct(m.variation)} <span class="muted">vs précédent</span></span><span class="metric-foot"><span>Moy. ${m.average == null ? '—' : formatNumber(m.average)}</span><span class="range">Min–max ${range}</span><span class="count">${m.count || 0} relevés</span></span></article>`;
   }).join('');
 }
 
@@ -191,10 +196,25 @@ async function mutateAlert(id, payload) {
 }
 
 function renderChart(series) {
-  const allRows = Object.values(series).flat().sort((a, b) => new Date(a.collected_at) - new Date(b.collected_at));
-  const labels = [...new Set(allRows.map(r => r.collected_at.slice(0, 10)))];
+  const marketDate = row => row.source_date || row.collected_at?.slice(0, 10);
+  const allRows = Object.values(series || {}).flat().sort((a, b) => marketDate(a).localeCompare(marketDate(b)));
+  const labels = [...new Set(allRows.map(marketDate).filter(Boolean))];
+  const ctx = $('#price-chart');
+  const empty = $('#chart-empty');
+  if (chart) { chart.destroy(); chart = null; }
+  ctx.parentElement.querySelector('.chart-fallback')?.remove();
+  if (!labels.length) {
+    ctx.hidden = true;
+    empty.hidden = false;
+    empty.innerHTML = '<strong>Aucun relevé pour cette période</strong><span>Choisissez 12 mois ou 5 ans, ou lancez une nouvelle collecte.</span>';
+    $('#legend').innerHTML = '';
+    $('#chart-note').textContent = 'Le graphique apparaîtra dès qu’un relevé daté de cette période sera disponible.';
+    return;
+  }
+  empty.hidden = true;
   const datasets = Object.entries(PRODUCT_META).map(([key, meta]) => {
-    const rows = series[key] || []; const byDate = Object.fromEntries(rows.map(r => [r.collected_at.slice(0, 10), Number(r.price)]));
+    const rows = [...(series[key] || [])].sort((a, b) => marketDate(a).localeCompare(marketDate(b)));
+    const byDate = Object.fromEntries(rows.map(r => [marketDate(r), Number(r.price)]));
     const first = rows.length ? Number(rows[0].price) : null;
     const data = labels.map(date => {
       const value = byDate[date];
@@ -204,9 +224,7 @@ function renderChart(series) {
   });
   $('#legend').innerHTML = datasets.map(d => `<span><i style="background:${d.borderColor}"></i>${d.label}</span>`).join('');
   $('#chart-note').textContent = chartMode === 'indexed' ? 'Évolution relative depuis le premier relevé de la période.' : 'Valeurs brutes : chaque série conserve son unité d’origine.';
-  if (chart) chart.destroy();
-  const ctx = $('#price-chart');
-  if (!window.Chart) { ctx.hidden = true; if (!ctx.parentElement.querySelector('.chart-fallback')) ctx.insertAdjacentHTML('afterend', '<div class="empty chart-fallback">Le graphique sera disponible après chargement de Chart.js.</div>'); return; }
+  if (!window.Chart) { ctx.hidden = true; empty.hidden = true; if (!ctx.parentElement.querySelector('.chart-fallback')) ctx.insertAdjacentHTML('afterend', '<div class="empty chart-fallback">Le graphique sera disponible après chargement de Chart.js.</div>'); return; }
   ctx.hidden = false; ctx.parentElement.querySelector('.chart-fallback')?.remove();
   chart = new Chart(ctx, { type: 'line', data: { labels: labels.map(d => new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })), datasets }, options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#081d29', padding: 12, titleColor: '#fff', bodyColor: '#bfd0d7', callbacks: { label: item => { const actual = item.dataset.actualData?.[item.dataIndex]; const value = chartMode === 'indexed' ? `${formatNumber(item.raw, 1)} · ${actual == null ? '—' : formatNumber(actual)}` : formatNumber(actual ?? item.raw); return ` ${item.dataset.label}: ${value}`; } } } }, scales: { x: { grid: { display: false }, ticks: { color: '#6c8995', maxTicksLimit: 7, font: { size: 10 } } }, y: { grid: { color: 'rgba(167,206,219,.08)' }, ticks: { color: '#6c8995', font: { size: 10 }, callback: value => chartMode === 'indexed' ? `${value}` : formatNumber(value, 0) }, title: { display: true, text: chartMode === 'indexed' ? 'Indice' : 'Prix', color: '#6c8995', font: { size: 10, weight: '600' } }, border: { display: false } } } } });
 }
@@ -399,7 +417,12 @@ async function loadDashboard() {
     $('#source-count').textContent = `${data.quality?.source_count ?? data.latest.length} sources`;
     $('#observation-count').textContent = `${data.quality?.observation_count ?? 0}`;
     setSystemStatus(data.demo_mode ? 'Démonstration active' : 'Système opérationnel', data.demo_mode ? 'warning' : '');
-  } catch (error) { setSystemStatus('Données indisponibles', 'error'); showToast(error.message, true); }
+  } catch (error) {
+    renderChart({});
+    $('#chart-empty').innerHTML = '<strong>Service de données indisponible</strong><span>Redémarrez l’application, puis actualisez cette page.</span>';
+    setSystemStatus('Données indisponibles', 'error');
+    showToast(error.message, true);
+  }
 }
 
 async function loadLogs() {
