@@ -98,7 +98,7 @@ OPENAPI_SPEC = {
             "post": {"tags": ["market"], "summary": "Ajouter une observation", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "requestBody": {"required": True, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ObservationInput"}}}}, "responses": {"201": {"description": "Observation créée"}, "400": {"description": "Entrée invalide", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}}},
         },
         "/api/history": {
-            "get": {"tags": ["market"], "summary": "Historique paginé avec filtres", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "parameters": [
+            "get": {"tags": ["market"], "summary": "Historique public paginé avec filtres", "parameters": [
                 {"$ref": "#/components/parameters/Product"},
                 {"$ref": "#/components/parameters/Page"},
                 {"$ref": "#/components/parameters/PageSize"},
@@ -108,10 +108,10 @@ OPENAPI_SPEC = {
                 {"name": "date_to", "in": "query", "schema": {"type": "string", "format": "date"}},
                 {"name": "min_price", "in": "query", "schema": {"type": "number", "minimum": 0}},
                 {"name": "max_price", "in": "query", "schema": {"type": "number", "minimum": 0}},
-            ], "responses": {"200": {"description": "Historique filtré et paginé"}, "401": {"description": "Authentification requise"}}}
+            ], "responses": {"200": {"description": "Historique filtré et paginé"}}}
         },
         "/api/history/compare": {
-            "get": {"tags": ["market"], "summary": "Comparer deux périodes", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "responses": {"200": {"description": "Comparaison par produit"}, "400": {"description": "Périodes invalides"}, "401": {"description": "Authentification requise"}}}
+            "get": {"tags": ["market"], "summary": "Comparer publiquement deux périodes", "responses": {"200": {"description": "Comparaison par produit"}, "400": {"description": "Périodes invalides"}}}
         },
         "/api/collect": {
             "post": {"tags": ["market"], "summary": "Déclencher une collecte immédiate", "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}], "responses": {"200": {"description": "Résultat de collecte"}, "401": {"description": "Authentification requise"}}}

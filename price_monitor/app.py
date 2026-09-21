@@ -275,15 +275,11 @@ class Handler(BaseHTTPRequestHandler):
                 days = max(1, min(1825, int(query.get("days", [30])[0])))
                 return self.send_json(database.observations(product, days))
             if parsed.path == "/api/history":
-                if not self._protect_api():
-                    return
                 filters = history_filters(query)
                 page = max(1, int(query.get("page", [1])[0]))
                 page_size = max(1, min(100, int(query.get("page_size", [50])[0])))
                 return self.send_json(database.history(**filters, page=page, page_size=page_size))
             if parsed.path == "/api/history/compare":
-                if not self._protect_api():
-                    return
                 required = ("period_a_from", "period_a_to", "period_b_from", "period_b_to")
                 missing = [name for name in required if not query.get(name, [""])[0]]
                 if missing:
