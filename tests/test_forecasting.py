@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from price_monitor.services.forecasting import build_forecast, daily_series, forecast_product
+from price_monitor.services.forecasting import _damped_holt, _backtest
 
 
 def synthetic_rows(count: int = 220) -> list[dict]:
@@ -63,3 +64,35 @@ def test_build_forecast_returns_both_market_products():
     assert result["horizons"] == [7, 30, 90]
     assert set(result["products"]) == {"gasoil", "brent"}
     assert result["products"]["gasoil"]["status"] == "ready"
+
+
+def test_damped_trend_converges_instead_of_turning_back_to_level():
+    predictions = _damped_holt([1.0, 2.0], 400)
+    assert all(b >= a for a, b in zip(predictions, predictions[1:]))
+    first_increment = predictions[1] - predictions[0]
+    next_increment = predictions[2] - predictions[1]
+    assert abs(next_increment / first_increment - .985) < 1e-10
+
+
+def test_missing_days_advance_the_calendar_model_without_observations():
+    # Equal prices separated by longer time must not imply the same daily trend.
+    daily = _damped_holt([10., 20.], 7, [0, 1])
+    sparse = _damped_holt([10., 20.], 7, [0, 10])
+    assert sparse[-1] < daily[-1]
+
+
+def test_calendar_backtest_counts_only_actual_prices_inside_horizon():
+    values = [80.] * 80
+    days = [i*7 for i in range(80)]
+    result = _backtest(values, 7, days)
+    assert result["samples"] == result["folds"]
+    assert result["mae"] == result["naive_mae"] == 0
+    assert result["interval_coverage"] == 1
+    assert result["horizon_unit"] == "calendar_days"
+
+
+def test_forecast_exposes_age_origin_and_honest_interval_metadata():
+    result = forecast_product(synthetic_rows(), "gasoil")
+    assert result["forecast_origin"] == result["last_actual"]["date"]
+    assert result["interval_method"] == "heuristic_residual_sqrt_time"
+    assert isinstance(result["is_stale"], bool)

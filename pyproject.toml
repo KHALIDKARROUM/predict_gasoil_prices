@@ -25,6 +25,9 @@ analysis = [
   "statsmodels>=0.14.0",
   "jupyter>=1.0.0",
   "nbformat>=5.9.0",
+  "nbclient>=0.10.0",
+  "scikit-learn>=1.5.0",
+  "joblib>=1.4.0",
 ]
 test = ["pytest>=8.0.0"]
 dev = ["pytest>=8.0.0", "build>=1.2.0"]

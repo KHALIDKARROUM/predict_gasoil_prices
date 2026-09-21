@@ -83,7 +83,7 @@ OPENAPI_SPEC = {
             "get": {"tags": ["market"], "summary": "Indicateurs, séries et qualité", "parameters": [{"$ref": "#/components/parameters/Days"}], "responses": {"200": {"description": "Tableau de bord"}}}
         },
         "/api/forecast": {
-            "get": {"tags": ["market"], "summary": "Prévisions gasoil et Brent", "parameters": [{"$ref": "#/components/parameters/HistoryDays"}], "responses": {"200": {"description": "Prévisions à 7, 30 et 90 jours avec intervalles de confiance et métriques de backtest"}, "400": {"description": "Paramètre invalide"}}}
+            "get": {"tags": ["market"], "summary": "Prévisions gasoil et Brent", "parameters": [{"$ref": "#/components/parameters/HistoryDays"}], "responses": {"200": {"description": "Prévisions à 7, 30 et 90 jours calendaires depuis la dernière date source, bandes indicatives, comparaison au prix constant et couverture historique"}, "400": {"description": "Paramètre invalide"}}}
         },
         "/api/alerts": {
             "get": {"tags": ["market"], "summary": "Lister les règles et leur état", "responses": {"200": {"description": "Règles actives, rétablies ou en pause"}}},

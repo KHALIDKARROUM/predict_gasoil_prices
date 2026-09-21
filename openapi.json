@@ -338,7 +338,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Pr\u00e9visions \u00e0 7, 30 et 90 jours avec intervalles de confiance et m\u00e9triques de backtest"
+            "description": "Pr\u00e9visions \u00e0 7, 30 et 90 jours calendaires depuis la derni\u00e8re date source, bandes indicatives, comparaison au prix constant et couverture historique"
           },
           "400": {
             "description": "Param\u00e8tre invalide"

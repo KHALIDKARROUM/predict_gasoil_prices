@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .env
 .venv/
+reports/data_science/models/
+notebooks/.ipynb_checkpoints/

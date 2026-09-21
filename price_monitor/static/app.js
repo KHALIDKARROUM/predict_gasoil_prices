@@ -1,8 +1,9 @@
 const PRODUCT_META = {
-  gasoil: { label: 'Gasoil / diesel', short: 'Gasoil', color: '#5eead4', purchaseUnit: 'gallon' },
-  brent: { label: 'Pétrole Brent', short: 'Brent', color: '#f9b35c', purchaseUnit: 'baril' },
-  bitume: { label: 'Bitume', short: 'Bitume', color: '#a78bfa', purchaseUnit: 'tonne' }
+  gasoil: { label: 'Gasoil / diesel', short: 'Gasoil', color: '#a9d5bc', purchaseUnit: 'gallon' },
+  brent: { label: 'Pétrole Brent', short: 'Brent', color: '#dfbb83', purchaseUnit: 'baril' },
+  bitume: { label: 'Bitume', short: 'Bitume', color: '#b4aed4', purchaseUnit: 'tonne' }
 };
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let chart;
 let chartMode = 'indexed';
 let forecastCharts = {};
@@ -98,18 +99,18 @@ function renderForecastProduct(key) {
   forecastCharts[key] = new Chart(chartContext, {
     type: 'line',
     data: { labels: labels.map(forecastDate), datasets: [
-      { label: 'Borne basse', data: lower, borderColor: 'transparent', backgroundColor: 'rgba(167, 206, 219, .13)', pointRadius: 0, fill: false, spanGaps: true },
-      { label: 'Intervalle de confiance', data: upper, borderColor: 'transparent', backgroundColor: 'rgba(167, 206, 219, .13)', pointRadius: 0, fill: '-1', spanGaps: true },
+      { label: 'Borne basse', data: lower, borderColor: 'transparent', backgroundColor: 'rgba(200, 200, 200, .1)', pointRadius: 0, fill: false, spanGaps: true },
+      { label: 'Bande indicative', data: upper, borderColor: 'transparent', backgroundColor: 'rgba(200, 200, 200, .1)', pointRadius: 0, fill: '-1', spanGaps: true },
       { label: 'Réel', data: actualSeries, borderColor: meta.color, backgroundColor: meta.color, borderWidth: 2, pointRadius: 0, tension: .3, spanGaps: true },
       { label: 'Prévision', data: forecast, borderColor: '#f0f7f9', backgroundColor: '#f0f7f9', borderWidth: 2, borderDash: [6, 4], pointRadius: 0, tension: .3, spanGaps: true }
     ] },
-    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#081d29', padding: 10, callbacks: { label: item => ` ${item.dataset.label}: ${formatNumber(item.raw, item.raw < 10 ? 3 : 2)} ${meta.purchaseUnit === 'gallon' ? 'USD/gallon' : 'USD/baril'}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#6c8995', maxTicksLimit: 8, font: { size: 10 } } }, y: { grid: { color: 'rgba(167,206,219,.08)' }, ticks: { color: '#6c8995', font: { size: 10 }, callback: value => formatNumber(value, value < 10 ? 3 : 0) }, border: { display: false } } } }
+    options: { animation: reducedMotion.matches ? false : { duration: 350 }, responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#202020', padding: 10, callbacks: { label: item => ` ${item.dataset.label}: ${formatNumber(item.raw, item.raw < 10 ? 3 : 2)} ${meta.purchaseUnit === 'gallon' ? 'USD/gallon' : 'USD/baril'}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#a0a0a0', maxTicksLimit: 8, font: { size: 10 } } }, y: { grid: { color: 'rgba(255,255,255,.07)' }, ticks: { color: '#a0a0a0', font: { size: 10 }, callback: value => formatNumber(value, value < 10 ? 3 : 0) }, border: { display: false } } } }
   });
   const lastActual = actual.at(-1);
   const finalForecast = future.at(-1);
   const backtest = product.backtest?.[horizon] || {};
   const change = lastActual?.value ? ((finalForecast.value - lastActual.value) / lastActual.value) * 100 : null;
-  stats.innerHTML = `<div><span>Dernier réel</span><strong>${formatNumber(lastActual?.value, lastActual?.value < 10 ? 3 : 2)}</strong></div><div><span>À J+${horizon}</span><strong>${formatNumber(finalForecast?.value, finalForecast?.value < 10 ? 3 : 2)}</strong><em class="${change >= 0 ? 'up' : 'down'}">${formatPct(change)}</em></div><div><span>MAPE backtest</span><strong>${backtest.mape == null ? '—' : `${formatNumber(backtest.mape, 1)} %`}</strong></div>`;
+  stats.innerHTML = `<div><span>Dernier réel</span><strong>${formatNumber(lastActual?.value, lastActual?.value < 10 ? 3 : 2)}</strong></div><div><span>À J+${horizon}</span><strong>${formatNumber(finalForecast?.value, finalForecast?.value < 10 ? 3 : 2)}</strong><em class="${change >= 0 ? 'up' : 'down'}">${formatPct(change)}</em></div><div><span>MAPE backtest</span><strong>${backtest.mape == null ? '—' : `${formatNumber(backtest.mape, 1)} %`}</strong></div><div><span>Gain MAE vs prix constant</span><strong>${backtest.mae_skill_vs_naive == null ? '—' : `${formatNumber(100 * backtest.mae_skill_vs_naive, 1)} %`}</strong></div><div><span>Couverture historique</span><strong>${backtest.interval_coverage == null ? '—' : `${formatNumber(100 * backtest.interval_coverage, 1)} %`}</strong></div><div><span>Origine de la prévision</span><strong>${formatDate(product.forecast_origin || lastActual?.date)}</strong></div>`;
 }
 
 function renderForecast() {
@@ -123,7 +124,9 @@ async function loadForecast() {
     if (!response.ok) throw new Error('Impossible de calculer les prévisions.');
     forecastData = await response.json();
     const generated = forecastData.generated_at ? formatDate(forecastData.generated_at, true) : 'à l’instant';
-    $('#forecast-status').textContent = `Modèle de tendance amortie · validation historique · calculé ${generated}`;
+    const stale = Object.values(forecastData.products || {}).filter(product => product.is_stale);
+    $('#forecast-status').textContent = `Holt amorti · horizons en jours calendaires · calculé ${generated}${stale.length ? ' · Attention : dernières données anciennes, projections ancrées sur leur date source.' : ''}`;
+    $('#forecast-status').classList.toggle('error-note', stale.length > 0);
     renderForecast();
   } catch (error) {
     $('#forecast-status').textContent = error.message;
@@ -226,7 +229,7 @@ function renderChart(series) {
   $('#chart-note').textContent = chartMode === 'indexed' ? 'Évolution relative depuis le premier relevé de la période.' : 'Valeurs brutes : chaque série conserve son unité d’origine.';
   if (!window.Chart) { ctx.hidden = true; empty.hidden = true; if (!ctx.parentElement.querySelector('.chart-fallback')) ctx.insertAdjacentHTML('afterend', '<div class="empty chart-fallback">Le graphique sera disponible après chargement de Chart.js.</div>'); return; }
   ctx.hidden = false; ctx.parentElement.querySelector('.chart-fallback')?.remove();
-  chart = new Chart(ctx, { type: 'line', data: { labels: labels.map(d => new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })), datasets }, options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#081d29', padding: 12, titleColor: '#fff', bodyColor: '#bfd0d7', callbacks: { label: item => { const actual = item.dataset.actualData?.[item.dataIndex]; const value = chartMode === 'indexed' ? `${formatNumber(item.raw, 1)} · ${actual == null ? '—' : formatNumber(actual)}` : formatNumber(actual ?? item.raw); return ` ${item.dataset.label}: ${value}`; } } } }, scales: { x: { grid: { display: false }, ticks: { color: '#6c8995', maxTicksLimit: 7, font: { size: 10 } } }, y: { grid: { color: 'rgba(167,206,219,.08)' }, ticks: { color: '#6c8995', font: { size: 10 }, callback: value => chartMode === 'indexed' ? `${value}` : formatNumber(value, 0) }, title: { display: true, text: chartMode === 'indexed' ? 'Indice' : 'Prix', color: '#6c8995', font: { size: 10, weight: '600' } }, border: { display: false } } } } });
+  chart = new Chart(ctx, { type: 'line', data: { labels: labels.map(d => new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })), datasets }, options: { animation: reducedMotion.matches ? false : { duration: 350 }, responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#202020', padding: 12, titleColor: '#fff', bodyColor: '#cccccc', callbacks: { label: item => { const actual = item.dataset.actualData?.[item.dataIndex]; const value = chartMode === 'indexed' ? `${formatNumber(item.raw, 1)} · ${actual == null ? '—' : formatNumber(actual)}` : formatNumber(actual ?? item.raw); return ` ${item.dataset.label}: ${value}`; } } } }, scales: { x: { grid: { display: false }, ticks: { color: '#a0a0a0', maxTicksLimit: 7, font: { size: 10 } } }, y: { grid: { color: 'rgba(255,255,255,.07)' }, ticks: { color: '#a0a0a0', font: { size: 10 }, callback: value => chartMode === 'indexed' ? `${value}` : formatNumber(value, 0) }, title: { display: true, text: chartMode === 'indexed' ? 'Indice' : 'Prix', color: '#a0a0a0', font: { size: 10, weight: '600' } }, border: { display: false } } } } });
 }
 
 function renderLatest(rows) {
@@ -442,30 +445,119 @@ document.querySelectorAll('.mode-btn').forEach(button => button.addEventListener
 const navigation = $('.sidebar');
 const navigationToggle = $('#nav-toggle');
 const navigationItems = [...document.querySelectorAll('.nav-item')];
+const pageViews = [...document.querySelectorAll('[data-page]')];
+const mobileNavigation = window.matchMedia('(max-width: 760px)');
+const pageDetails = {
+  marches: ['Marchés', 'L’essentiel des prix, en un regard.'],
+  tendances: ['Tendances', 'Explorez les projections à 7, 30 et 90 jours.'],
+  veille: ['Veille', 'Gardez un œil sur les seuils qui comptent.'],
+  archives: ['Archives', 'Retrouvez vos relevés et comparez les périodes.'],
+  'nouveau-prix': ['Nouveau prix', 'Ajoutez un devis ou un prix de bitume validé.'],
+  fournisseurs: ['Fournisseurs', 'Trouvez vos contacts et préparez vos demandes de prix.'],
+  budget: ['Budget', 'Estimez le coût de vos achats et leur impact.'],
+  activite: ['Activité', 'Consultez la qualité des données et les dernières collectes.']
+};
+// Preserve links saved before the page names changed.
+const pageAliases = {
+  overview: 'marches', forecast: 'tendances', alerts: 'veille',
+  history: 'archives', 'history-page': 'archives', compare: 'archives',
+  manual: 'nouveau-prix', 'buying-guide': 'fournisseurs',
+  procurement: 'budget', sources: 'activite'
+};
+let activePage = null;
+let navigationVersion = 0;
+let pageAnimations = [];
 
 function setNavigationOpen(open) {
   navigation.classList.toggle('nav-open', open);
-  navigationToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  navigationToggle.setAttribute('aria-expanded', String(open));
   navigationToggle.querySelector('.sr-only').textContent = open ? 'Fermer la navigation' : 'Ouvrir la navigation';
+  $('#primary-navigation').inert = mobileNavigation.matches && !open;
+}
+
+function resolvePage(hash) {
+  const key = hash.replace(/^#/, '');
+  if (Object.hasOwn(pageDetails, key)) return key;
+  return Object.hasOwn(pageAliases, key) ? pageAliases[key] : 'marches';
+}
+
+async function showPage({ animate = true, focus = true } = {}) {
+  const key = resolvePage(window.location.hash);
+  const next = document.getElementById(key);
+  const version = ++navigationVersion;
+  pageAnimations.forEach(animation => animation.cancel());
+  pageAnimations = [];
+  setNavigationOpen(false);
+  if (window.location.hash !== `#${key}`) window.history.replaceState(null, '', `#${key}`);
+  const moving = animate && !reducedMotion.matches && typeof next.animate === 'function';
+  if (activePage && activePage !== next && moving) {
+    const exit = activePage.animate(
+      [{ opacity: 1, transform: 'translateY(0)' }, { opacity: 0, transform: 'translateY(-6px)' }],
+      { duration: 110, easing: 'ease-out', fill: 'forwards' }
+    );
+    pageAnimations.push(exit);
+    await exit.finished.catch(() => {});
+    if (version !== navigationVersion) return;
+  }
+  pageAnimations.forEach(animation => animation.cancel());
+  pageAnimations = [];
+  pageViews.forEach(page => { page.hidden = page !== next; });
+  const changed = activePage !== next;
+  activePage = next;
+  const [title, description] = pageDetails[key];
+  $('#page-title').textContent = title;
+  $('#page-description').textContent = description;
+  document.title = `${title} · Price Monitor`;
+  navigationItems.forEach(item => {
+    const selected = item.getAttribute('href') === `#${key}`;
+    item.classList.toggle('active', selected);
+    if (selected) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  });
+  if (focus) {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    $('#page-title').focus({ preventScroll: true });
+  }
+  // Charts created in hidden views need their visible container dimensions.
+  if (key === 'marches') chart?.resize();
+  if (key === 'tendances') Object.values(forecastCharts).forEach(instance => instance.resize());
+  if (changed && moving && !reducedMotion.matches) {
+    pageAnimations.push(next.animate(
+      [{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'translateY(0)' }],
+      { duration: 280, easing: 'cubic-bezier(.22, 1, .36, 1)' }
+    ));
+  }
 }
 
 navigationToggle.addEventListener('click', () => setNavigationOpen(!navigation.classList.contains('nav-open')));
-navigationItems.forEach(item => item.addEventListener('click', () => {
-  navigationItems.forEach(navItem => navItem.classList.toggle('active', navItem === item));
-  setNavigationOpen(false);
-}));
-
-const observedSections = navigationItems
-  .map(item => document.querySelector(item.getAttribute('href')))
-  .filter(Boolean);
-if ('IntersectionObserver' in window) {
-  const navigationObserver = new IntersectionObserver(entries => {
-    const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-    if (!visible) return;
-    navigationItems.forEach(item => item.classList.toggle('active', item.getAttribute('href') === `#${visible.target.id}`));
-  }, { rootMargin: '-20% 0px -65% 0px', threshold: [0.05, 0.25, 0.5] });
-  observedSections.forEach(section => navigationObserver.observe(section));
-}
+mobileNavigation.addEventListener('change', () => setNavigationOpen(false));
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && navigation.classList.contains('nav-open')) {
+    setNavigationOpen(false);
+    navigationToggle.focus();
+  }
+});
+document.addEventListener('click', event => {
+  const link = event.target.closest('a[href^="#"]');
+  if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const hash = link.getAttribute('href');
+  if (hash === '#main-content') return;
+  const target = hash.slice(1);
+  if (!Object.hasOwn(pageDetails, target) && !Object.hasOwn(pageAliases, target)) return;
+  event.preventDefault();
+  const nextHash = `#${resolvePage(hash)}`;
+  if (window.location.hash !== nextHash) window.history.pushState(null, '', nextHash);
+  showPage();
+});
+window.addEventListener('hashchange', () => {
+  if (window.location.hash !== '#main-content') showPage();
+});
+reducedMotion.addEventListener('change', () => {
+  if (reducedMotion.matches) pageAnimations.forEach(animation => animation.finish());
+});
+document.documentElement.classList.add('pages-ready');
+setNavigationOpen(false);
+showPage({ animate: false, focus: false });
 
 $('#period-select').addEventListener('change', loadDashboard);
 $('#forecast-horizon').addEventListener('change', renderForecast);

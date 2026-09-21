@@ -1,0 +1,243 @@
+"""Generate an auditable offline research report, figures and experiment records."""
+from __future__ import annotations
+
+import hashlib
+import importlib.metadata
+import json
+import platform
+import warnings
+from datetime import datetime, timezone
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from sklearn.inspection import permutation_importance
+from statsmodels.tsa.stattools import acf, adfuller, kpss
+from threadpoolctl import threadpool_limits
+
+from .data import PRODUCTS, UNITS, audit_data, load_market_data
+from .modeling import SEED, run_experiment
+
+
+def write_json(path: Path, data) -> None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
+
+
+def _save(fig, output: Path, name: str) -> None:
+    fig.tight_layout()
+    fig.savefig(output / name, dpi=140, bbox_inches="tight")
+    plt.close(fig)
+
+
+def exploratory_analysis(frame: pd.DataFrame, output: Path) -> dict:
+    """Model diagnostics use only the first 65%; final outcomes stay unseen."""
+    train = frame.iloc[:int(len(frame) * .65)]
+    returns = pd.DataFrame({p: np.log(train[p].dropna()).diff() for p in PRODUCTS})
+    # Co-movement uses identical start AND end dates. A missing diesel day must
+    # not silently pair its multi-day return with Brent's single-day return.
+    paired_prices = train.dropna()
+    paired_returns = np.log(paired_prices).diff().dropna()
+    train.describe().T.to_csv(output / "descriptive_statistics.csv", index_label="product")
+    missing = frame.isna().sum().rename("missing_rows").to_frame()
+    missing.to_csv(output / "missingness.csv", index_label="product")
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8))
+    for row, product in enumerate(PRODUCTS):
+        s = train[product].dropna()
+        axes[row, 0].plot(s.index, s, lw=.8, label="Observed")
+        axes[row, 0].plot(s.rolling(30).mean(), lw=1.5, label="30-observation mean")
+        axes[row, 0].set(title=f"{product} — {UNITS[product]}", ylabel=UNITS[product])
+        axes[row, 0].legend()
+        axes[row, 1].hist(returns[product].dropna() * 100, bins=45, color="#528c80")
+        axes[row, 1].set(title=f"{product} — log returns", xlabel="Return per observed interval (%)")
+    _save(fig, output, "eda_prices_returns.png")
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8))
+    stationarity, anomalies = [], []
+    for row, product in enumerate(PRODUCTS):
+        s, r = train[product].dropna(), returns[product].dropna()
+        axes[row, 0].plot(r.rolling(30).std() * 100, color="#528c80")
+        axes[row, 0].set(title=f"{product} — volatility", ylabel="30-observation std. (%)")
+        ac = acf(r, nlags=min(40, len(r)//4), fft=True)
+        axes[row, 1].stem(np.arange(len(ac)), ac)
+        axes[row, 1].set(title=f"{product} — return autocorrelation", xlabel="Observation lag")
+        for label, values in [("log_price", np.log(s)), ("log_return", r)]:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                adf_result = adfuller(values, autolag="AIC")
+                kpss_result = kpss(values, regression="c", nlags="auto")
+            stationarity.append({"product": product, "transform": label,
+                "adf_statistic": adf_result[0], "adf_pvalue": adf_result[1],
+                "kpss_statistic": kpss_result[0], "kpss_pvalue": kpss_result[1],
+                "warnings": " | ".join(str(w.message) for w in caught)})
+        median, mad = r.median(), (r-r.median()).abs().median()
+        z = .6745*(r-median)/mad if mad else r*0
+        for day, score in z[z.abs() > 3.5].items():
+            anomalies.append({"product": product, "date": str(day.date()),
+                              "log_return_pct": r.loc[day]*100, "robust_z": score})
+    _save(fig, output, "eda_volatility_acf.png")
+    pd.DataFrame(stationarity).to_csv(output / "stationarity.csv", index=False)
+    pd.DataFrame(anomalies, columns=["product", "date", "log_return_pct", "robust_z"]).to_csv(output / "anomalies.csv", index=False)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4))
+    paired_returns.rolling(60).corr().loc[(slice(None), "brent"), "gasoil"].droplevel(1).plot(ax=axes[0])
+    axes[0].set(title="Aligned-return 60-observation correlation", ylim=(-1, 1))
+    seasonal = paired_returns.groupby(paired_returns.index.month).mean()*100
+    seasonal.plot.bar(ax=axes[1])
+    axes[1].set(title="Mean log return by month (descriptive)", ylabel="%", xlabel="Month")
+    _save(fig, output, "eda_correlation_seasonality.png")
+    seasonal.to_csv(output / "seasonality.csv", index_label="month")
+    return {"diagnostic_end": str(train.index[-1].date()),
+        "aligned_return_correlation": float(paired_returns.corr().loc["brent", "gasoil"]),
+        "anomaly_flags": len(anomalies), "anomalies_removed": 0}
+
+
+def _markdown_table(frame: pd.DataFrame) -> str:
+    def cell(v):
+        return f"{v:.4f}" if isinstance(v, (float, np.floating)) else str(v)
+    rows = ["| " + " | ".join(map(str, frame.columns)) + " |",
+            "| " + " | ".join("---" for _ in frame.columns) + " |"]
+    rows += ["| " + " | ".join(cell(v) for v in row) + " |" for row in frame.itertuples(index=False, name=None)]
+    return "\n".join(rows)
+
+
+def run_analysis(data_path: Path, output: Path, horizons=(1, 7, 30, 90), save_models=False) -> dict:
+    data_path, output = Path(data_path).resolve(), Path(output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    frame = load_market_data(data_path)
+    audit = audit_data(frame, data_path)
+    if any(info.get("raw_mismatches", 0) for info in audit["products"].values()):
+        raise ValueError("Processed snapshot does not match its bundled source CSVs")
+    write_json(output / "data_quality.json", audit)
+    eda = exploratory_analysis(frame, output)
+    results, cv_results, all_folds, selections, importances, predictions = [], [], [], [], [], []
+    plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
+    for product in PRODUCTS:
+        for horizon in horizons:
+            print(f"Evaluating {product}, {horizon} calendar day(s)...", flush=True)
+            with threadpool_limits(limits=2):
+                experiment = run_experiment(frame, product, horizon)
+            selected = experiment["selected"]
+            result = experiment["metrics"].assign(product=product, horizon_days=horizon)
+            results.append(result)
+            cv_results.append(experiment["cv"].assign(product=product, horizon_days=horizon))
+            all_folds += [{"product": product, "horizon_days": horizon, **f} for f in experiment["folds"]]
+            card = {"product": product, "horizon_days": horizon, "selected_model": selected,
+                "selection_rule": "Lowest mean purged-CV price MAE; require 2% improvement over persistence.",
+                "development_rows": len(experiment["development"]), "calibration_rows": len(experiment["calibration"]),
+                "holdout_rows": len(experiment["holdout"]), "calibration_start": experiment["calibration_start"],
+                "test_start": experiment["test_start"],
+                "last_training_target": str(experiment["labels"].loc[experiment["development"]].target_date.max().date()),
+                "feature_names": experiment["features"], "seed": SEED,
+                "snapshot_sha256": audit["sha256"], "production_promoted": False}
+            selections.append(card)
+            write_json(output / f"model_card_{product}_{horizon}.json", card)
+            for model_name, prediction in experiment["predictions"].items():
+                predictions.append(prediction.assign(product=product, horizon_days=horizon, model=model_name))
+            # Explain the best ML candidate on calibration only, even when the
+            # persistence baseline wins selection. Correlated lags share signal.
+            ranking = experiment["cv"].groupby("model").mae.mean().sort_values()
+            ml_name = next(name for name in ranking.index if experiment["models"][name] is not None)
+            cal = experiment["calibration"]
+            with threadpool_limits(limits=2):
+                importance = permutation_importance(experiment["models"][ml_name], experiment["x"].loc[cal],
+                    experiment["labels"].loc[cal].target_log_return, n_repeats=5,
+                    random_state=SEED, scoring="neg_mean_absolute_error", n_jobs=1)
+            importances.append(pd.DataFrame({"feature": experiment["features"],
+                "importance_mean": importance.importances_mean, "importance_std": importance.importances_std,
+                "product": product, "horizon_days": horizon, "model": ml_name,
+                "split": "calibration", "metric": "increase_in_log_return_mae"}))
+            if save_models:
+                import joblib
+                model_dir = output / "models"
+                model_dir.mkdir(exist_ok=True)
+                joblib.dump({"model": experiment["models"][selected], "metadata": card},
+                            model_dir / f"{product}_{horizon}.joblib")
+            # Model and calibration are frozen throughout the final holdout.
+            chosen = experiment["predictions"][selected]
+            fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+            axes[0].plot(chosen.target_date, chosen.actual, label="Actual", color="#222")
+            axes[0].plot(chosen.target_date, chosen.prediction, label=selected, color="#388776")
+            axes[0].fill_between(chosen.target_date, chosen.lower, chosen.upper, color="#388776", alpha=.15,
+                                 label="95% nominal, calibrated on earlier data")
+            axes[0].set(title=f"{product} — {horizon}-day target, frozen holdout", ylabel=UNITS[product])
+            axes[0].legend(fontsize=8)
+            axes[1].plot(chosen.target_date, chosen.prediction-chosen.actual, color="#ad6538")
+            axes[1].axhline(0, color="#888", lw=.7)
+            axes[1].set(ylabel="Prediction − actual", xlabel="Actual target publication date")
+            _save(fig, output, f"holdout_{product}_{horizon}.png")
+    table, cv_table = pd.concat(results, ignore_index=True), pd.concat(cv_results, ignore_index=True)
+    table.to_csv(output / "holdout_metrics.csv", index=False)
+    cv_table.to_csv(output / "cross_validation.csv", index=False)
+    pd.DataFrame(all_folds).to_csv(output / "split_audit.csv", index=False)
+    pd.concat(importances).to_csv(output / "feature_importance.csv", index=False)
+    pd.concat(predictions).to_csv(output / "holdout_predictions.csv", index=False)
+    versions = {name: importlib.metadata.version(name) for name in
+                ("numpy", "pandas", "scikit-learn", "scipy", "statsmodels", "matplotlib", "joblib")}
+    source_files = [*Path(__file__).parent.glob("*.py"), Path(__file__).parents[1] / "services" / "forecasting.py"]
+    manifest = {"generated_at": datetime.now(timezone.utc).isoformat(), "python": platform.python_version(),
+        "packages": versions, "seed": SEED, "horizons_calendar_days": list(horizons),
+        "data_sha256": audit["sha256"], "data_start": audit["start"], "data_end": audit["end"],
+        "code_sha256": {str(p.relative_to(Path(__file__).parents[1])): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files},
+        "eda": eda, "experiments": selections}
+    write_json(output / "manifest.json", manifest)
+    selected_rows = table[table.selected_on_validation]
+    columns = ["product", "horizon_days", "model", "mae", "rmse", "mae_skill_vs_naive", "interval_coverage"]
+    report = f"""# Data science audit and results
+
+Generated from the local snapshot **{audit['start']} → {audit['end']}**, {audit['rows']} rows.
+SHA-256: `{audit['sha256']}`. Full versions, split dates and code fingerprints: [manifest.json](manifest.json).
+
+## Findings and corrections
+
+- The original notebook had partial execution, no engineered features, and no ML comparison. Its purported next-observation baseline was a single-origin constant prediction across 60 observations; it now uses rolling one-step persistence.
+- The live Holt implementation damped its accumulated forecast trend twice. The geometric sum is corrected. Missing calendar days now advance model state without creating observations; validation uses the same calendar-day horizons as the API.
+- The live forecast now reports persistence skill, empirical interval coverage, forecast origin, and data age. Its residual-based bands are explicitly heuristic, not validated confidence guarantees.
+- Raw/processed local CSV agreement, missingness, finite positive prices, date uniqueness and chronology are checked before fitting. Local consistency does not authenticate the upstream provider or resolve historical revisions.
+
+## Feature engineering and evaluation
+
+Features cover lagged log returns, price/rolling-mean ratios, momentum, volatility, calendar cycles, gap length, and strictly earlier observations of the other product. Rolling windows count observations. Own price at origin is assumed published; cross-product features older than seven days are missing. Targets are actual observed prices, never interpolated.
+
+Each direct model predicts the first publication on or after 1, 7, 30 or 90 calendar days (at most four days late). The exact label date is recorded. This endpoint experiment differs from the live service's evaluation of all observed points inside a forecast window.
+
+First 65%: development and expanding-window cross-validation. Next 15%: interval calibration. Last 20%: frozen final holdout. Training labels crossing a split boundary are purged. Imputation and scaling are fitted only on training folds. Boosting early stopping is disabled to avoid a random internal validation split. Candidates: persistence, corrected Holt, regularized linear regression (Ridge), histogram gradient boosting, and random forest. Hyperparameters and seed are fixed in source.
+
+Selection uses validation MAE only, requiring at least 2% improvement over persistence. All candidate holdout scores are diagnostic; the holdout winner is not used to change the selection. Models stay frozen across calibration and holdout; baseline states use observations available at each origin, as real-time persistence does.
+
+## Selected models: untouched holdout results
+
+{_markdown_table(selected_rows[columns])}
+
+MAE/RMSE use each product's own price unit; they must not be averaged across products. Positive skill means improvement over persistence; negative skill means worse. Interval coverage is a fraction. See [all model metrics](holdout_metrics.csv), [validation scores](cross_validation.csv), [split audit](split_audit.csv), and [predictions](holdout_predictions.csv).
+
+## EDA and interpretation
+
+Model diagnostics use development dates only (through {eda['diagnostic_end']}). Price/return distributions, rolling volatility, ACF, calendar seasonality, ADF/KPSS stationarity tests, aligned-return correlation and robust shock flags are included. ADF's null is a unit root; KPSS's null is level stationarity. Their assumptions and structural breaks limit conclusions. Warnings and bounded p-values are retained. Seasonal patterns are descriptive, not evidence of a repeatable trading effect.
+
+Aligned-return correlation: **{eda['aligned_return_correlation']:.3f}**. Both products use exactly the same start/end dates for this calculation. Flagged shocks: **{eda['anomaly_flags']}**, automatically removed: **0**. Missing weekdays include holidays and must not all be called data failures.
+
+![Prices and returns](eda_prices_returns.png)
+![Volatility and autocorrelation](eda_volatility_acf.png)
+![Correlation and seasonality](eda_correlation_seasonality.png)
+
+Calibration-set permutation importance is saved in [feature_importance.csv](feature_importance.csv). It measures changes in log-return MAE, not causal effects. Correlated features can substitute for one another, so importance is not a feature-deletion rule.
+
+## Limits and next decisions
+
+- No ML model is automatically promoted to the live app. Review validation consistency, holdout skill, freshness and interval coverage before a separate deployment decision.
+- Historical provider publication timestamps and vintages are unavailable. Source-date causality prevents mechanical future leakage, but a true as-of backtest requires release timestamps/revision history. Data imported into SQL uses reconstructed collection times; those cannot establish actual availability.
+- Prices are market benchmarks. They omit executable quotes, transaction costs, freight, FX and supplier terms. No profitability or purchasing recommendation is inferred from forecast accuracy.
+- Bitumen is excluded: no comparable daily transaction-price history is supplied. The monthly BLS index is a separate quantity and must not be relabeled as USD/tonne.
+- Overlapping horizons and serial dependence mean fold errors are not independent. Calibration quantiles have a 95% nominal level; time-series dependence and regime changes remove exchangeability guarantees. Use measured holdout coverage.
+- Check fresh-data errors, missingness, feature ranges and interval coverage after deployment; reassess on new chronological data, not by repeatedly tuning to this holdout. Use block-bootstrap uncertainty or non-overlapping evaluation when more history is available.
+- Serialized models, if requested, are research artifacts fitted on development only, with their training cutoff in each model card. Never load untrusted pickle/joblib files. Baseline artifacts contain `model=None` and an explicit baseline name.
+
+## References
+
+- [scikit-learn: lagged features and time-series validation](https://scikit-learn.org/stable/auto_examples/applications/plot_time_series_lagged_features.html)
+- [Forecasting: Principles and Practice — damped Holt equations](https://otexts.com/fpp3/holt.html)
+- [scikit-learn: permutation importance](https://scikit-learn.org/stable/modules/generated/sklearn.inspection.permutation_importance.html)
+"""
+    (output / "report.md").write_text(report, encoding="utf-8")
+    return manifest

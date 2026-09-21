@@ -2,9 +2,9 @@
 
 The service intentionally uses only the Python standard library.  This keeps
 forecasting available in the production image without making the exploratory
-notebook dependencies part of the runtime.  A damped Holt trend is a good
-fit for these slowly moving daily commodity series and is more transparent to
-users than an opaque model with no validation metrics.
+notebook dependencies part of the runtime.  The fixed-parameter Holt model is a transparent baseline, not an assumption
+that it outperforms a random walk. Missing calendar days propagate its state
+without adding invented observations.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ def daily_series(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"date": day.isoformat(), "value": value} for day, (_, value) in sorted(latest.items())]
 
 
-def _damped_holt(values: list[float], horizon: int) -> list[float]:
+def _damped_holt(values: list[float], horizon: int, days: list[int] | None = None) -> list[float]:
     """Forecast with a damped trend exponential-smoothing model."""
     if not values:
         return []
@@ -77,8 +77,16 @@ def _damped_holt(values: list[float], horizon: int) -> list[float]:
     beta = 0.08
     damping = 0.985
     level = series[0]
-    trend = series[1] - series[0]
-    for observed in series[1:]:
+    timeline = days[-window_size:] if days is not None else list(range(len(series)))
+    if len(timeline) != len(series) or any(b <= a for a, b in zip(timeline, timeline[1:])):
+        raise ValueError("Dates must match observations and be strictly increasing")
+    trend = (series[1] - series[0]) / (timeline[1] - timeline[0])
+    for index, observed in enumerate(series[1:], start=1):
+        # Advance latent state across missing days, without measurement updates.
+        missing = timeline[index] - timeline[index - 1] - 1
+        if missing:
+            level += trend * damping * (1 - damping ** missing) / (1 - damping)
+            trend *= damping ** missing
         previous_level = level
         level = alpha * observed + (1 - alpha) * (level + damping * trend)
         trend = beta * (level - previous_level) + (1 - beta) * damping * trend
@@ -86,62 +94,68 @@ def _damped_holt(values: list[float], horizon: int) -> list[float]:
     predictions: list[float] = []
     damped_trend = 0.0
     for step in range(1, horizon + 1):
-        damped_trend = damping * damped_trend + damping ** step
+        damped_trend += damping ** step
         prediction = max(0.000001, level + damped_trend * trend)
         predictions.append(prediction)
     return predictions
 
 
-def _residual_standard_deviation(values: list[float]) -> float:
+def _residual_standard_deviation(values: list[float], days: list[int] | None = None) -> float:
     """Estimate one-step residual noise with a short walk-forward pass."""
     if len(values) < 3:
         return max(values[0] * 0.01, 0.000001) if values else 1.0
     start = max(2, len(values) - 120)
     residuals: list[float] = []
     for origin in range(start, len(values)):
-        prediction = _damped_holt(values[:origin], 1)[0]
-        residuals.append(values[origin] - prediction)
+        gap = days[origin] - days[origin - 1] if days is not None else 1
+        prediction = _damped_holt(values[:origin], gap, days[:origin] if days is not None else None)[-1]
+        residuals.append((values[origin] - prediction) / math.sqrt(gap))
     if not residuals:
         return max(mean(values) * 0.01, 0.000001)
     # Keep a small non-zero band for nearly constant test/demo series.
     return max(pstdev(residuals), mean(values) * 0.01, 0.000001)
 
 
-def _backtest(values: list[float], horizon: int) -> dict[str, Any]:
-    """Evaluate the same model at several historical forecast origins."""
-    minimum_train = max(MIN_OBSERVATIONS, min(len(values) - horizon, max(60, horizon * 2)))
-    latest_origin = len(values) - horizon
-    if latest_origin < minimum_train:
+def _backtest(values: list[float], horizon: int, days: list[int] | None = None) -> dict[str, Any]:
+    """Score observed prices inside complete calendar-day forecast windows.
+
+    Each origin uses only prior observations. Repeated observations across folds
+    are forecast pairs, not independent samples. Bands are heuristic, not a
+    calibrated statistical guarantee.
+    """
+    timeline = days if days is not None else list(range(len(values)))
+    origins = [i for i in range(MIN_OBSERVATIONS, len(values))
+               if timeline[i - 1] + horizon <= timeline[-1]]
+    if not origins:
         return {"available": False, "samples": 0, "mae": None, "rmse": None, "mape": None}
-
-    available_origins = list(range(minimum_train, latest_origin + 1))
-    max_folds = 5
-    if len(available_origins) > max_folds:
-        step = (len(available_origins) - 1) / (max_folds - 1)
-        origins = [available_origins[round(index * step)] for index in range(max_folds)]
-    else:
-        origins = available_origins
-
-    errors: list[float] = []
-    percentage_errors: list[float] = []
+    if len(origins) > 5:
+        origins = [origins[round(i * (len(origins) - 1) / 4)] for i in range(5)]
+    errors, percentages, baseline_errors, coverage = [], [], [], []
     for origin in origins:
-        predictions = _damped_holt(values[:origin], horizon)
-        actuals = values[origin: origin + horizon]
-        for actual, prediction in zip(actuals, predictions):
-            error = prediction - actual
+        train = values[:origin]
+        prediction = _damped_holt(train, horizon, timeline[:origin])
+        noise = _residual_standard_deviation(train, timeline[:origin])
+        for index in range(origin, len(values)):
+            step = timeline[index] - timeline[origin - 1]
+            if step > horizon:
+                break
+            actual = values[index]
+            error = prediction[step - 1] - actual
             errors.append(error)
-            if actual:
-                percentage_errors.append(abs(error) / abs(actual) * 100)
-
+            percentages.append(abs(error) / actual * 100)
+            baseline_errors.append(abs(train[-1] - actual))
+            coverage.append(abs(error) <= 1.96 * noise * math.sqrt(step))
     if not errors:
         return {"available": False, "samples": 0, "mae": None, "rmse": None, "mape": None}
+    mae, baseline_mae = mean(map(abs, errors)), mean(baseline_errors)
     return {
-        "available": True,
-        "folds": len(origins),
-        "samples": len(errors),
-        "mae": round(mean(abs(error) for error in errors), 6),
-        "rmse": round(math.sqrt(mean(error * error for error in errors)), 6),
-        "mape": round(mean(percentage_errors), 4) if percentage_errors else None,
+        "available": True, "folds": len(origins), "samples": len(errors),
+        "horizon_unit": "calendar_days", "evaluation": "observed_points_in_forecast_window",
+        "mae": round(mae, 6), "rmse": round(math.sqrt(mean(e * e for e in errors)), 6),
+        "mape": round(mean(percentages), 4), "bias": round(mean(errors), 6),
+        "naive_mae": round(baseline_mae, 6),
+        "mae_skill_vs_naive": round(1 - mae / baseline_mae, 6) if baseline_mae else None,
+        "interval_coverage": round(mean(coverage), 4),
     }
 
 
@@ -157,6 +171,10 @@ def forecast_product(rows: Iterable[dict[str, Any]], product: str, horizons: tup
         "label": meta["label"],
         "unit": meta["unit"],
         "model": "damped_holt",
+        "model_version": "2_calendar_time",
+        "horizon_unit": "calendar_days",
+        "interval_method": "heuristic_residual_sqrt_time",
+        "interval_nominal_level": 0.95,
         "history_count": len(series),
         "history": series[-120:],
         "forecasts": {},
@@ -175,15 +193,19 @@ def forecast_product(rows: Iterable[dict[str, Any]], product: str, horizons: tup
 
     values = [float(item["value"]) for item in series]
     last_day = date.fromisoformat(series[-1]["date"])
-    residual_std = _residual_standard_deviation(values)
+    days = [date.fromisoformat(item["date"]).toordinal() for item in series]
+    residual_std = _residual_standard_deviation(values, days)
+    age_days = (datetime.now(timezone.utc).date() - last_day).days
     base.update({
         "status": "ready",
         "training_start": series[0]["date"],
         "training_end": series[-1]["date"],
         "residual_std": _round(residual_std),
+        "age_days": age_days, "is_stale": age_days > 7,
+        "forecast_origin": last_day.isoformat(),
     })
     for horizon in horizons:
-        predictions = _damped_holt(values, horizon)
+        predictions = _damped_holt(values, horizon, days)
         points = []
         for index, prediction in enumerate(predictions, start=1):
             interval = 1.96 * residual_std * math.sqrt(index)
@@ -194,7 +216,7 @@ def forecast_product(rows: Iterable[dict[str, Any]], product: str, horizons: tup
                 "upper": _round(prediction + interval),
             })
         base["forecasts"][str(horizon)] = points
-        base["backtest"][str(horizon)] = _backtest(values, horizon)
+        base["backtest"][str(horizon)] = _backtest(values, horizon, days)
     return base
 
 

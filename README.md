@@ -32,6 +32,12 @@ Puis ouvrir `http://127.0.0.1:8080`.
 
 Pour utiliser MySQL, copiez `.env.example` vers `.env`, configurez `PRICE_MONITOR_DB_BACKEND=mysql` ainsi que `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER` et `MYSQL_PASSWORD`. L'application crée la base configurée si le compte possède ce droit, applique `sql/mysql_schema.sql`, puis exécute les migrations non encore enregistrées.
 
+## Navigation
+
+L’interface utilise un fond noir, des panneaux gris et huit pages : **Marchés**, **Tendances**, **Veille**, **Archives**, **Nouveau prix**, **Fournisseurs**, **Budget** et **Activité**. Les changements de page utilisent un fondu et un léger déplacement ; les animations sont désactivées lorsque la préférence système de réduction des mouvements est activée.
+
+Chaque page possède un lien direct (`#marches`, `#tendances`, `#veille`, `#archives`, `#nouveau-prix`, `#fournisseurs`, `#budget`, `#activite`). Les anciens liens restent compatibles. La navigation conserve les formulaires en cours et prend en charge les boutons précédent/suivant du navigateur. Sur mobile, le bouton de menu affiche les pages ; la touche Échap referme le menu.
+
 ## Tests
 
 Installer les dépendances puis lancer la suite automatisée :
@@ -40,7 +46,7 @@ Installer les dépendances puis lancer la suite automatisée :
 .\.venv\Scripts\python.exe -m pytest
 ```
      
-Les tests couvrent la validation et la persistance SQLite, les calculs du tableau de bord, les exports CSV/Excel, l'import du snapshot réel EIA/FRED, les collectes complètes, partielles ou en échec, ainsi que le schéma et le moteur de migrations MySQL. Pour exécuter aussi le test d'intégration MySQL, définissez `RUN_MYSQL_TESTS=1` avec des paramètres `.env` valides.
+Les tests couvrent la validation et la persistance SQLite, les calculs du tableau de bord, les exports CSV/Excel, l'import du snapshot réel EIA/FRED, les collectes complètes, partielles ou en échec, ainsi que le schéma et le moteur de migrations MySQL. Ils vérifient aussi l'absence de fuite temporelle dans les variables et les cibles, la purge des horizons, l'isolation du holdout, les métriques et la logique Holt en jours calendaires. La CI installe donc les extras `test,analysis`. Pour exécuter aussi le test d'intégration MySQL, définissez `RUN_MYSQL_TESTS=1` avec des paramètres `.env` valides.
 
 Le projet démarre avec un snapshot réel de cinq ans dans `data/processed/market_prices.csv`, sans clé API. Pour actualiser les fichiers source et reconstruire le snapshot :
 
@@ -60,21 +66,32 @@ Le projet distingue volontairement trois types de données :
 
 Il n'existe pas de prix spot mondial gratuit et exécutable du bitume dans une API publique comparable à une cotation boursière. Une décision d'achat doit donc comparer des devis homogènes. L'application ne convertit jamais l'indice BLS en faux prix USD/tonne.
 
-## Analyse exploratoire
+## Analyse exploratoire, feature engineering et machine learning
 
-Le notebook exécuté est disponible dans `notebooks/market_price_eda.ipynb`. Il peut être relancé après installation des dépendances d'analyse :
+Deux notebooks sont fournis :
+
+- `notebooks/market_price_eda.ipynb` pour l'analyse descriptive des prix, rendements, volatilité, corrélation, saisonnalité et chocs ;
+- `notebooks/data_science_workflow.ipynb` pour l'audit des données, les variables historiques, la validation chronologique, la comparaison des modèles et l'analyse du holdout final.
+
+Le pipeline complet peut aussi être relancé sans interface :
 
 ```powershell
-python -m jupyter notebook notebooks/market_price_eda.ipynb
+python scripts/run_data_science.py --save-models
 ```
 
-Les séries Brent et gasoil sont conservées dans leurs unités publiées respectives : USD/baril et USD/gallon. Les comparaisons de volatilité et de corrélation utilisent les variations journalières afin d'éviter de confondre échelle de prix et co-mouvement.
+Le rapport généré est `reports/data_science/report.md`. Il contient les contrôles de qualité, les graphiques EDA, les découpages temporels, les scores de validation et de holdout, les prédictions, l'importance des variables et une fiche par expérience. Le manifeste enregistre le hash du snapshot, les versions des dépendances, la graine et les empreintes du code.
+
+Les variables comprennent les rendements logarithmiques retardés, momentum, volatilité, écarts aux moyennes mobiles, cycles calendaires, durée entre publications et informations antérieures de l'autre produit. Les cibles restent toujours des prix réellement publiés : aucun prix cible n'est interpolé. Les transformations sont ajustées dans chaque pli d'entraînement, les cibles qui dépassent une frontière de validation sont purgées, et les 20 % les plus récents restent un holdout final.
+
+Le benchmark de persistance, Holt amorti corrigé, Ridge, gradient boosting et forêt aléatoire sont comparés aux horizons 1, 7, 30 et 90 jours calendaires. La sélection exige au moins 2 % de gain MAE par rapport au dernier prix connu. Sur le snapshot actuellement livré, aucun modèle complexe ne franchit ce seuil de façon régulière en validation ; la persistance reste donc le modèle sélectionné. Les modèles de recherche ne sont pas automatiquement mis en production.
+
+Les séries Brent et gasoil sont conservées dans leurs unités publiées respectives : USD/baril et USD/gallon. Les corrélations de rendement utilisent des intervalles de dates identiques. Les chocs détectés restent dans les données et sont seulement signalés. Le bitume est exclu du machine learning faute d'un historique quotidien comparable en USD/tonne.
 
 ## Prévisions
 
-La route `GET /api/forecast?history_days=1825` calcule des projections à 7, 30 et 90 jours pour le gasoil et le Brent. Le service agrège les relevés au jour, applique un modèle de tendance amortie de Holt et retourne, pour chaque horizon, la valeur prévue, une bande de confiance à 95 % ainsi que les métriques de backtest (MAE, RMSE, MAPE et nombre de relevés évalués). Le tableau de bord affiche les 120 derniers relevés réels, la projection sélectionnée et la MAPE correspondante.
+La route `GET /api/forecast?history_days=1825` calcule des projections à 7, 30 et 90 jours calendaires à partir de la dernière date source pour le gasoil et le Brent. Le service agrège les relevés au jour, applique un modèle transparent de tendance amortie de Holt et retourne la valeur prévue, une bande indicative, MAE, RMSE, MAPE, biais, gain MAE face au dernier prix constant et couverture historique de la bande.
 
-Un historique d'au moins 30 jours est nécessaire pour produire une prévision. Les données à moins de 30 relevés sont signalées comme insuffisantes plutôt que remplacées par une valeur inventée. Les bandes de confiance décrivent l'incertitude historique du modèle et ne constituent pas une garantie de prix.
+Un historique d'au moins 30 relevés journaliers est nécessaire. Les données manquantes ne sont pas inventées : l'état du modèle avance simplement dans le temps. Les bandes utilisent les erreurs résiduelles passées et une largeur croissante avec l'horizon ; elles ne sont ni une garantie ni un intervalle calibré pour tous les régimes. La date d'origine, l'âge des données et la couverture mesurée sont exposés dans l'API et le tableau de bord.
 
 ## API locale
 
@@ -91,7 +108,7 @@ Sans clé configurée, `/api/collect` et `/api/observations` répondent avec une
 | Méthode | Route | Rôle |
 |---|---|---|
 | GET | `/api/dashboard?days=30` | indicateurs, séries et derniers relevés |
-| GET | `/api/forecast?history_days=1825` | prévisions gasoil et Brent à 7, 30 et 90 jours, bandes de confiance et backtest |
+| GET | `/api/forecast?history_days=1825` | prévisions gasoil et Brent à 7, 30 et 90 jours calendaires, bandes indicatives, comparaison au prix constant et backtest |
 | GET | `/api/alerts` | règles d'alerte et états courants |
 | GET | `/api/benchmarks?product=bitume` | derniers indicateurs publics, séparés des devis |
 | GET | `/api/suppliers?product=bitume&region=europe` | canaux fournisseurs stockés en SQL |
@@ -109,7 +126,7 @@ En production, une limitation en mémoire s'applique par adresse cliente : 60 re
 
 ## Alertes de prix et de disponibilité
 
-Les règles d'alerte peuvent être créées, modifiées, mises en pause ou supprimées depuis la section « Alertes de prix » du tableau de bord. Chaque règle associe un produit, une direction (`above` ou `below`), un seuil et un canal (`webhook`, `email` ou `both`). L'interface affiche les règles actives, rétablies, surveillées et en pause.
+Les règles d'alerte peuvent être créées, modifiées, mises en pause ou supprimées depuis la page « Veille » du tableau de bord. Chaque règle associe un produit, une direction (`above` ou `below`), un seuil et un canal (`webhook`, `email` ou `both`). L'interface affiche les règles actives, rétablies, surveillées et en pause.
 
 Les règles configurées dans l'interface sont persistées dans `alert_rules`. Pour conserver la compatibilité avec les installations existantes, `PRICE_MONITOR_ALERT_THRESHOLDS` reste utilisé comme configuration de secours tant qu'aucune règle enregistrée n'existe :
 
@@ -129,11 +146,11 @@ Exemple de saisie bitume :
 
 `source_date` doit respecter le format `YYYY-MM-DD` et `collected_at`, lorsqu'il est fourni, doit être un horodatage ISO 8601 avec fuseau. L'unité doit correspondre à celle du produit. Une nouvelle tentative avec le même produit, la même source, la même date source et le même prix réutilise l'observation existante.
 
-Les exports `/export.csv` et `/export.xlsx` acceptent les mêmes filtres que `/api/history` et exportent tous les résultats correspondants, sans pagination. La page « Historique » permet également de comparer les moyennes, minimums, maximums et volumes de relevés de deux périodes.
+Les exports `/export.csv` et `/export.xlsx` acceptent les mêmes filtres que `/api/history` et exportent tous les résultats correspondants, sans pagination. La page « Archives » permet également de comparer les moyennes, minimums, maximums et volumes de relevés de deux périodes.
 
 ## Impact d'un achat
 
-Le formulaire « Évaluer une commande » et la route protégée `POST /api/procurements` enregistrent une estimation d'achat avec le fournisseur, la quantité, la devise, le prix unitaire, le transport, le taux de change et le budget prévu. Le taux de change est exprimé en **USD pour une unité de la devise de l'achat** : `1 EUR = 1.09 USD` se saisit donc `1.09`.
+Le formulaire « Préparer un budget » et la route protégée `POST /api/procurements` enregistrent une estimation d'achat avec le fournisseur, la quantité, la devise, le prix unitaire, le transport, le taux de change et le budget prévu. Le taux de change est exprimé en **USD pour une unité de la devise de l'achat** : `1 EUR = 1.09 USD` se saisit donc `1.09`.
 
 L'application calcule :
 
@@ -141,11 +158,11 @@ L'application calcule :
 - l'écart au budget, positif lorsque l'achat dépasse le budget ;
 - l'écart du prix unitaire et l'impact total par rapport au dernier prix marché connu du produit.
 
-L'historique est disponible via `GET /api/procurements?limit=100` et dans la section « Achats » du tableau de bord.
+L'historique est disponible via `GET /api/procurements?limit=100` et dans la page « Budget » du tableau de bord.
 
 ## Où acheter et comment acheter
 
-La section « Où & comment acheter » ne place aucune commande automatiquement. Elle fournit des voies de contact officielles vers des producteurs, distributeurs ou services B2B et un processus de contrôle :
+La page « Fournisseurs » ne place aucune commande automatiquement. Elle fournit des voies de contact officielles vers des producteurs, distributeurs ou services B2B et un processus de contrôle :
 
 1. définir le grade et la norme (`EN 590` pour le diesel, `EN 12591`/`ASTM D946` pour le bitume) ;
 2. envoyer le même RFQ à au moins trois vendeurs avec quantité, destination, fenêtre et Incoterm 2020 ;
