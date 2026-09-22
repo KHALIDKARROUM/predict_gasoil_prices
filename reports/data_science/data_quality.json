@@ -11,8 +11,8 @@
       "missing_weekdays_including_holidays": 41,
       "longest_gap_calendar_days": 5,
       "latest_source_date": "2026-09-09",
-      "age_calendar_days": 12,
-      "raw_sha256": "90b25160f3193d9c1440e8bb45e4fb621f69bb19a4c5736928fdb0c7f2bdc7fb",
+      "age_calendar_days": 13,
+      "raw_sha256": "87e4e7f740b9ed6f784116d1c42cce25198119e972fb3449409d1a3fd5269a35",
       "raw_mismatches": 0
     },
     "gasoil": {
@@ -22,8 +22,8 @@
       "missing_weekdays_including_holidays": 58,
       "longest_gap_calendar_days": 5,
       "latest_source_date": "2026-09-09",
-      "age_calendar_days": 12,
-      "raw_sha256": "e395d6cf1f84b3c174e932398e8c40a51376d3d900ce9dbef137c33387df35e0",
+      "age_calendar_days": 13,
+      "raw_sha256": "d6070410d48e90d805311208738e458c6aca18cc59d75acfc349d0126cd02326",
       "raw_mismatches": 0
     }
   },

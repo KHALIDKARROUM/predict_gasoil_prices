@@ -6,7 +6,7 @@ from price_monitor.services import collectors as collectors_module
 from price_monitor.services import scheduler as scheduler_module
 
 
-def gasoil_observation() -> dict:
+def gasoil_observation():
     return {
         "product": "gasoil",
         "price": 2.4,

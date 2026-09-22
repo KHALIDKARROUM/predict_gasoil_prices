@@ -25,13 +25,13 @@ SERIES = {
 }
 
 
-def download(url: str, destination: Path) -> None:
+def download(url, destination):
     request = Request(url, headers={"User-Agent": "PriceMonitor/1.0"})
     with urlopen(request, timeout=30) as response:
         destination.write_bytes(response.read())
 
 
-def read_series(path: Path) -> dict[str, float]:
+def read_series(path):
     values: dict[str, float] = {}
     with path.open("r", encoding="utf-8", newline="") as handle:
         rows = csv.DictReader(handle)
@@ -58,7 +58,7 @@ def read_series(path: Path) -> dict[str, float]:
     return values
 
 
-def build_dataset(years: int, refresh: bool) -> tuple[int, str, str]:
+def build_dataset(years, refresh) :
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     series_data: dict[str, dict[str, float]] = {}
@@ -87,7 +87,7 @@ def build_dataset(years: int, refresh: bool) -> tuple[int, str, str]:
     return len(dates), dates[0], dates[-1]
 
 
-def main() -> None:
+def main() :
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--years", type=int, choices=range(2, 6), default=5, help="Fenêtre historique à conserver (2 à 5 ans).")
     parser.add_argument("--refresh", action="store_true", help="Retélécharger les fichiers source avant normalisation.")

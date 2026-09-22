@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 
-def observation_payload(product: str, price: float, source_date: str, collected_at: str) -> dict:
+def observation_payload(product: str, price: float, source_date: str, collected_at: str) :
     return {
         "product": product,
         "price": price,
