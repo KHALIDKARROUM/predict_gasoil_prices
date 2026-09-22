@@ -22,16 +22,20 @@ Repository: [KHALIDKARROUM/prices_monitor](https://github.com/KHALIDKARROUM/pric
 
 ## Démarrage rapide
 
-Depuis la racine du dépôt :
+Depuis la racine du dépôt, une seule commande suffit :
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m price_monitor.app
+bash run.sh
 ```
 
 Puis ouvrir `http://127.0.0.1:8080`.
+
+Le script crée `.venv` si nécessaire, installe les dépendances manquantes et démarre l'application. Sous PowerShell, la méthode équivalente reste disponible :
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m price_monitor.app
+```
 
 Pour utiliser MySQL, copiez `.env.example` vers `.env`, configurez `PRICE_MONITOR_DB_BACKEND=mysql` ainsi que `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER` et `MYSQL_PASSWORD`. L'application crée la base configurée si le compte possède ce droit, applique `sql/mysql_schema.sql`, puis exécute les migrations non encore enregistrées.
 
