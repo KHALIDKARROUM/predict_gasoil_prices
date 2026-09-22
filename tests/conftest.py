@@ -13,4 +13,4 @@ def empty_database(tmp_path, monkeypatch) -> Database:
     monkeypatch.setattr(database_module, "DEMO_MODE", False)
     return Database(tmp_path / "price_monitor.db")
 
-# feud API key for price monitorig 
+ # you should do this but
