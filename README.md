@@ -1,6 +1,8 @@
 # Price Monitor
 
-Application de suivi des prix internationaux du gasoil, du Brent et du bitume
+Application de suivi des prix internationaux du gasoil, du Brent et du bitume, avec tableau de bord responsive, prévisions transparentes et workflow data science reproductible.
+
+Repository: [KHALIDKARROUM/prices_monitor](https://github.com/KHALIDKARROUM/prices_monitor)
 ## Ce qui est livré
 
 - collecte manuelle ou planifiée cinq fois par jour à **08:00, 11:00, 14:00, 17:00 et 20:00** ;
@@ -11,15 +13,16 @@ Application de suivi des prix internationaux du gasoil, du Brent et du bitume
 - contrôle de qualité, validation stricte des dates et unités, déduplication idempotente, date de publication distincte de la date de collecte, variation absolue et en pourcentage ;
 - saisie validée des devis, commandes ou factures de bitume ;
 - répertoire SQL de canaux fournisseurs officiels, filtré par produit et région, avec processus RFQ, contrôle de contrepartie et calcul du coût rendu ;
-- tableau de bord responsive, graphiques de tendance, moyennes/minimums/maximums, journal des collectes ;
+- tableau de bord responsive à fond noir, navigation continue par défilement, graphiques de tendance, moyennes/minimums/maximums, journal des collectes ;
 - prévisions statistiques à 7, 30 et 90 jours pour le gasoil et le Brent, avec bandes de confiance et validation historique ;
 - exports CSV et Excel `.xlsx` ;
-- notebook d'exploration couvrant tendances, volatilité, corrélation, saisonnalité, anomalies, qualité et prévision naïve ;
+- notebook data science unique couvrant définition du problème, collecte, compréhension, nettoyage, EDA, feature engineering, préparation chronologique, sélection, entraînement, évaluation et tuning ;
+- galerie de graphiques intégrée : distributions, box plots, co-mouvements, heatmap de corrélation, valeurs manquantes, pair plot, relations feature-cible, séries temporelles et importance par permutation ;
 - mode démonstration disponible en option avec `PRICE_MONITOR_DEMO=true`.
 
 ## Démarrage rapide
 
-Depuis le dossier `repo_push` :
+Depuis la racine du dépôt :
 
 ```powershell
 python -m venv .venv
@@ -34,9 +37,9 @@ Pour utiliser MySQL, copiez `.env.example` vers `.env`, configurez `PRICE_MONITO
 
 ## Navigation
 
-L’interface utilise un fond noir, des panneaux gris et huit pages : **Marchés**, **Tendances**, **Veille**, **Archives**, **Nouveau prix**, **Fournisseurs**, **Budget** et **Activité**. Les changements de page utilisent un fondu et un léger déplacement ; les animations sont désactivées lorsque la préférence système de réduction des mouvements est activée.
+L’interface utilise un fond noir, des panneaux gris et huit sections : **Marchés**, **Tendances**, **Veille**, **Archives**, **Nouveau prix**, **Fournisseurs**, **Budget** et **Activité**. Les sections restent dans une page continue ; les liens de navigation défilent doucement vers la section choisie et la page active suit la position de défilement. Les animations sont désactivées lorsque la préférence système de réduction des mouvements est activée.
 
-Chaque page possède un lien direct (`#marches`, `#tendances`, `#veille`, `#archives`, `#nouveau-prix`, `#fournisseurs`, `#budget`, `#activite`). Les anciens liens restent compatibles. La navigation conserve les formulaires en cours et prend en charge les boutons précédent/suivant du navigateur. Sur mobile, le bouton de menu affiche les pages ; la touche Échap referme le menu.
+Chaque section possède un lien direct (`#marches`, `#tendances`, `#veille`, `#archives`, `#nouveau-prix`, `#fournisseurs`, `#budget`, `#activite`). Les anciens liens restent compatibles. La navigation conserve les formulaires en cours et prend en charge les boutons précédent/suivant du navigateur. Sur mobile, le bouton de menu affiche les sections ; la touche Échap referme le menu.
 
 ## Tests
 
@@ -68,9 +71,11 @@ Il n'existe pas de prix spot mondial gratuit et exécutable du bitume dans une A
 
 ## Analyse exploratoire, feature engineering et machine learning
 
-Deux notebooks sont fournis :
+Un notebook unique est fourni :
 
-- `notebooks/data_science_workflow.ipynb` regroupe le workflow complet : définition du problème, collecte, compréhension et nettoyage des données, EDA, feature engineering, préparation chronologique, sélection, entraînement, évaluation et tuning des modèles.
+- `notebooks/data_science_workflow.ipynb` regroupe les dix étapes du workflow, avec 22 cellules de code exécutées et les figures intégrées au document.
+
+Les graphiques adaptés au snapshot comprennent les histogrammes, box plots des rendements, scatter plots Brent-gasoil, heatmap de corrélation, comptage des observations et valeurs manquantes, pair plot, feature vs target, box plot de la cible par quartile de volatilité, séries temporelles et importance des variables par permutation. Les graphiques de variables continues remplacent volontairement les count plots catégoriels, car le snapshot ne contient pas de variable catégorielle pertinente à compter.
 
 Le pipeline complet peut aussi être relancé sans interface :
 
